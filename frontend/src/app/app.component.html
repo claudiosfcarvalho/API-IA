@@ -1,0 +1,163 @@
+<div class="page-bg"></div>
+<div class="page">
+  <div class="dev-tools" *ngIf="devMode">
+    <button class="dev-debug-btn" type="button" (click)="toggleDevDebug()">
+      {{ showDevDebug ? 'Ocultar DEV DEBUG' : 'DEV DEBUG' }}
+    </button>
+  </div>
+
+  <header class="hero">
+    <h1>API IA Studio</h1>
+    <p>Assistente multimodal, transcricao com diarizacao e texto para audio em uma interface unica.</p>
+  </header>
+
+  <nav class="tabs">
+    <button [class.active]="activeTab === 'assistant'" (click)="selectTab('assistant')">Assistente IA</button>
+    <button [class.active]="activeTab === 'transcription'" (click)="selectTab('transcription')">Transcricao</button>
+    <button [class.active]="activeTab === 'tts'" (click)="selectTab('tts')">Texto para Audio</button>
+  </nav>
+
+  <section class="card" *ngIf="activeTab === 'assistant'">
+    <h2>Assistente IA multimodal</h2>
+    <label>Modelo</label>
+    <input [(ngModel)]="assistantModel" placeholder="llama3.2" />
+
+    <label>Prompt</label>
+    <textarea [(ngModel)]="assistantInput" rows="6" placeholder="Digite seu pedido..."></textarea>
+
+    <div class="file-grid">
+      <label class="file-box">
+        <span>Imagem (opcional)</span>
+        <input type="file" accept="image/*" (change)="onAssistantImageSelected($event)" />
+        <small>{{ assistantImageFile?.name || 'Nenhuma imagem selecionada' }}</small>
+      </label>
+
+      <label class="file-box">
+        <span>Audio (opcional)</span>
+        <input type="file" accept="audio/*" (change)="onAssistantAudioSelected($event)" />
+        <small>{{ assistantAudioFile?.name || 'Nenhum audio selecionado' }}</small>
+      </label>
+    </div>
+
+    <button class="primary" [disabled]="assistantLoading" (click)="sendAssistantRequest()">
+      {{ assistantLoading ? 'Processando...' : 'Enviar para IA' }}
+    </button>
+
+    <article class="result" *ngIf="assistantResult">
+      <h3>Resposta</h3>
+      <p class="answer">{{ assistantResult.answer }}</p>
+      <div class="meta-grid">
+        <div><strong>Model:</strong> {{ assistantResult.model }}</div>
+        <div><strong>Correlation:</strong> {{ assistantResult.correlationId }}</div>
+        <div><strong>Tempo:</strong> {{ assistantResult.metrics.processingTimeMs }} ms</div>
+        <div><strong>Tokens:</strong> {{ assistantResult.metrics.totalTokens }}</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="card" *ngIf="activeTab === 'transcription'">
+    <h2>Transcricao de audio</h2>
+
+    <label class="file-box full">
+      <span>Arquivo de audio</span>
+      <input type="file" accept="audio/*" (change)="onTranscriptionAudioSelected($event)" />
+      <small>{{ transcriptionFile?.name || 'Nenhum arquivo selecionado' }}</small>
+    </label>
+
+    <div class="inline-grid">
+      <div>
+        <label>Idioma</label>
+        <input [(ngModel)]="transcriptionLanguage" placeholder="pt" />
+      </div>
+      <div>
+        <label>Modelo</label>
+        <input [(ngModel)]="transcriptionModel" placeholder="large-v3" />
+      </div>
+    </div>
+
+    <button class="primary" [disabled]="transcriptionLoading" (click)="sendTranscriptionRequest()">
+      {{ transcriptionLoading ? 'Transcrevendo...' : 'Iniciar transcricao' }}
+    </button>
+
+    <audio *ngIf="originalAudioUrl" [src]="originalAudioUrl" controls></audio>
+
+    <article class="result" *ngIf="transcriptionResult">
+      <div class="result-head">
+        <h3>Transcricao completa</h3>
+        <button class="ghost" (click)="downloadTranscript()">Baixar .txt</button>
+      </div>
+      <p class="answer">{{ transcriptionResult.transcript }}</p>
+      <ul>
+        <li *ngFor="let segment of transcriptionResult.segments">
+          <strong>Locutor {{ segment.speaker }}</strong>
+          <span>{{ segment.startMs }} - {{ segment.endMs }} ms</span>
+          <p>{{ segment.text }}</p>
+        </li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="card" *ngIf="activeTab === 'tts'">
+    <h2>Texto para Audio (TTS)</h2>
+
+    <label>Texto</label>
+    <textarea [(ngModel)]="ttsText" rows="6" placeholder="Digite o texto para gerar audio"></textarea>
+
+    <div class="inline-grid">
+      <div>
+        <label>Voz</label>
+        <select [(ngModel)]="ttsVoice">
+          <option *ngFor="let voice of ttsVoices" [value]="voice">{{ voice }}</option>
+        </select>
+      </div>
+      <div>
+        <label>Idioma</label>
+        <input [(ngModel)]="ttsLanguage" placeholder="pt-BR" />
+      </div>
+      <div>
+        <label>Formato</label>
+        <select [(ngModel)]="ttsFormat">
+          <option value="wav">wav</option>
+          <option value="mp3">mp3</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="primary" [disabled]="ttsLoading" (click)="generateTts()">
+      {{ ttsLoading ? 'Gerando audio...' : 'Gerar audio' }}
+    </button>
+
+    <div class="result" *ngIf="ttsAudioUrl">
+      <audio [src]="ttsAudioUrl" controls autoplay></audio>
+      <button class="ghost" (click)="downloadTtsAudio()">Baixar audio</button>
+    </div>
+  </section>
+
+  <div class="toast" *ngIf="toastMessage" [class.error]="toastType === 'error'">{{ toastMessage }}</div>
+
+  <section class="card dev-debug-panel" *ngIf="devMode && showDevDebug">
+    <h2>DEV DEBUG - Erros da API</h2>
+    <p>Formato RFC 7807 com separacao entre erro funcional e tecnico.</p>
+
+    <div class="debug-grid" *ngIf="latestError; else noDebugError">
+      <article class="debug-block">
+        <h3>Erro funcional</h3>
+        <p><strong>Codigo:</strong> {{ latestError.functional.code }}</p>
+        <p><strong>Mensagem:</strong> {{ latestError.functional.message }}</p>
+      </article>
+
+      <article class="debug-block">
+        <h3>Erro tecnico</h3>
+        <p><strong>Correlation ID:</strong> {{ latestError.technical.correlationId || '-' }}</p>
+        <p><strong>Status:</strong> {{ latestError.technical.status || '-' }}</p>
+        <p><strong>Timestamp:</strong> {{ latestError.technical.timestamp || '-' }}</p>
+      </article>
+    </div>
+
+    <ng-template #noDebugError>
+      <div class="debug-empty">Nenhum erro disponivel no momento.</div>
+    </ng-template>
+
+    <pre class="debug-json">{{ devDebugSnapshot() }}</pre>
+  </section>
+</div>

@@ -1,0 +1,36 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: api-ia-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/ | grep -qi 'ollama'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  whisperx:
+    image: learnedmachine/whisperx-asr-service:latest
+    container_name: api-ia-whisperx
+    ports:
+      - "9000:9000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-hf_replace_me}
+      DEVICE: ${WHISPERX_DEVICE:-cpu}
+      PRELOAD_MODEL: ${WHISPERX_PRELOAD_MODEL:-large-v3}
+    volumes:
+      - whisperx-cache:/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  ollama-data:
+  whisperx-cache:

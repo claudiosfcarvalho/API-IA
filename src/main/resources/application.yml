@@ -1,0 +1,163 @@
+################################################################################
+# Configurações da Aplicação API-IA
+#
+# Este arquivo YAML centraliza todas as configurações da aplicação Spring Boot,
+# incluindo servidor, serviços de IA, limites de upload, timeouts e políticas
+# de resiliência (retry, circuit-breaker, time-limiter, bulkhead).
+#
+# Ambientes: development (localhost), production (docker/cloud)
+#
+################################################################################
+
+################################################################################
+# Servidor HTTP
+################################################################################
+server:
+  port: 8080  # Porta onde a API fica disponível
+
+################################################################################
+# Spring Framework - Upload de Arquivos
+################################################################################
+spring:
+  servlet:
+    multipart:
+      # Limite de tamanho individual de arquivo (200MB para áudios grandes)
+      max-file-size: 200MB
+      # Limite total da requisição (210MB = 200MB + overhead)
+      max-request-size: 210MB
+
+################################################################################
+# Configurações Customizadas da Aplicação (prefixo: app)
+################################################################################
+app:
+  # === Configuração do Serviço LLM (Ollama) ===
+  llm:
+    baseUrl: "http://localhost:11434"      # URL do servidor Ollama
+    defaultModel: "llama3.2"                # Modelo LLM padrão
+    timeout: "120s"                         # Timeout para requisições LLM (aumentado de 30s)
+    maxInputChars: 20000                    # Limite de caracteres de entrada
+    cost:                                   # Configuração de custo (gratuito localmente)
+      inputPer1K: 0.0
+      outputPer1K: 0.0
+
+  # === Configuração do Serviço de Transcrição (WhisperX) ===
+  transcription:
+    enabled: true                           # Habilitar serviço de transcrição
+    baseUrl: "http://localhost:9000"        # URL do servidor WhisperX
+    defaultModel: "large-v3"                # Modelo de transcrição padrão
+    allowedDir: "C:/Users/Claudio/repositorio/Pós-Graduação - Java Applied Engineering/dados/audio"
+    outputDir: "C:/Users/Claudio/repositorio/Pós-Graduação - Java Applied Engineering/dados/transcricoes"
+    timeout: "120s"                         # Timeout para transcrição
+    maxFileBytes: 209715200                 # Máximo 200MB (alinhado com upload)
+
+  # === Configuração de Requisições Multimodais ===
+  multimodal:
+    maxImageBytes: 10485760                 # Máximo 10MB por imagem
+    maxAudioBytes: 209715200                # Máximo 200MB por áudio
+    allowedImageTypes: "image/jpeg,image/png,image/webp"
+    allowedAudioTypes: "audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a"
+    visionModel: "llava:7b"                 # Modelo com suporte a visão
+
+  # === Configuração de Síntese de Fala (TTS) ===
+  tts:
+    timeout: "60s"                          # Timeout para síntese de fala
+    maxTextChars: 10000                     # Limite de caracteres para sintetizar
+    defaultLanguage: "pt-BR"                # Idioma padrão
+    defaultVoice: "default"                 # Voz padrão
+    defaultFormat: "wav"                    # Formato de saída padrão
+
+  # === Configuração Web (CORS) ===
+  web:
+    # Origens autorizadas para requisições de browser
+    corsAllowedOrigins: "http://localhost:4200"
+
+################################################################################
+# Spring Boot Actuator - Health Checks e Métricas
+################################################################################
+management:
+  endpoints:
+    web:
+      exposure:
+        # Expor endpoints públicos de health, info e métricas Prometheus
+        include: health,info,prometheus
+
+################################################################################
+# Políticas de Resiliência (Resilience4j)
+################################################################################
+
+# === Retry: Tentativas automáticas em caso de falha ===
+resilience4j:
+  retry:
+    instances:
+      # Retry para chamadas LLM
+      llm:
+        max-attempts: 2                     # Máximo 2 tentativas (1 + 1 retry)
+        wait-duration: 500ms                # Esperar 500ms entre tentativas
+        retry-exceptions:                   # Exceções que disparam retry
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+          - java.util.concurrent.TimeoutException
+      # Retry para transcrição
+      transcription:
+        max-attempts: 2
+        wait-duration: 700ms
+        retry-exceptions:
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+          - java.util.concurrent.TimeoutException
+      # Retry para TTS
+      tts:
+        max-attempts: 2
+        wait-duration: 400ms
+        retry-exceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+
+  # === Circuit Breaker: Corte automático após falhas recorrentes ===
+  circuitbreaker:
+    instances:
+      # Circuit breaker para LLM
+      llm:
+        sliding-window-size: 20             # Janela de 20 chamadas
+        minimum-number-of-calls: 10         # Mínimo 10 chamadas para avaliar
+        failure-rate-threshold: 50          # Abrir se >50% falharem
+        wait-duration-in-open-state: 30s    # Tentar novamente após 30s
+      # Circuit breaker para transcrição
+      transcription:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+      # Circuit breaker para TTS
+      tts:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+
+  # === Time Limiter: Timeout máximo por operação ===
+  timelimiter:
+    instances:
+      llm:
+        timeout-duration: 120s              # Timeout de 120 segundos para LLM
+      transcription:
+        timeout-duration: 120s              # Timeout de 120 segundos para transcrição
+      tts:
+        timeout-duration: 60s               # Timeout de 60 segundos para TTS
+
+  # === Bulkhead: Limite de chamadas concorrentes ===
+  bulkhead:
+    instances:
+      llm:
+        max-concurrent-calls: 20            # Máximo 20 chamadas simultâneas ao LLM
+        max-wait-duration: 1s               # Esperar máximo 1s na fila
+      transcription:
+        max-concurrent-calls: 8
+        max-wait-duration: 1s
+      tts:
+        max-concurrent-calls: 16
+        max-wait-duration: 1s
+
+logging:
+  pattern:
+    level: "%5p [cid:%X{correlationId}]"

@@ -57,6 +57,51 @@ export interface TranscriptionResponse {
 }
 
 /**
+ * Interface para snapshot de métricas do backend.
+ */
+export interface BackendDashboardMetricsResponse {
+  timestamp: string;
+  cpu: {
+    processCpuPct: number;
+    systemCpuPct: number;
+    availableProcessors: number;
+    systemLoadPct: number;
+  };
+  memory: {
+    heapUsedMb: number;
+    heapMaxMb: number;
+    heapUsagePct: number;
+    systemTotalMemoryMb: number;
+    systemFreeMemoryMb: number;
+  };
+  jvm: {
+    uptimeMs: number;
+    threadCount: number;
+    peakThreadCount: number;
+    pid: string;
+  };
+  network: {
+    interfaceCount: number;
+    activeInterfaces: number;
+    loopbackInterfaces: number;
+    ipv4Addresses: string[];
+  };
+  latency: {
+    processingTimeMs: number;
+  };
+}
+
+/**
+ * Interface para resposta de tail de logs do backend.
+ */
+export interface BackendLogTailResponse {
+  path: string;
+  totalLines: number;
+  nextLine: number;
+  lines: string[];
+}
+
+/**
  * Serviço de cliente HTTP para comunicação com API-IA backend.
  * 
  * Fornece métodos para:
@@ -174,5 +219,65 @@ export class ApiService {
    */
   listVoices(): Observable<string[]> {
     return this.http.get<string[]>(`${this.base}/api/tts/voices`);
+  }
+
+  /**
+   * Obtém snapshot consolidado de métricas do backend.
+   *
+   * @returns observable com métricas do dashboard
+   */
+  getBackendDashboardMetrics(): Observable<BackendDashboardMetricsResponse> {
+    return this.http.get<BackendDashboardMetricsResponse>(`${this.base}/api/metrics/dashboard`);
+  }
+
+  /**
+   * Busca linhas de log incrementalmente a partir de um cursor de linha.
+   *
+   * @param fromLine linha inicial para leitura incremental
+   * @param limit quantidade máxima de linhas retornadas
+   * @returns observable com linhas e próximo cursor
+   */
+  getBackendLogTail(fromLine = 0, limit = 200): Observable<BackendLogTailResponse> {
+    const params = new HttpParams()
+      .set('fromLine', `${Math.max(0, fromLine)}`)
+      .set('limit', `${Math.max(1, limit)}`);
+    return this.http.get<BackendLogTailResponse>(`${this.base}/api/logs/tail`, { params });
+  }
+
+  // ==================== RAG Endpoints ====================
+
+  /**
+   * FASE 1: RAG Only - Recupera contexto puro.
+   */
+  ragPhase1(query: string, category?: string, topK = 3): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/phase1`, { query, category, topK });
+  }
+
+  /**
+   * FASE 2: RAG + LLM - Recupera contexto e gera resposta inteligente.
+   */
+  ragPhase2(query: string, category?: string, topK = 3, model = 'llama2', temperature = 0.7): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/phase2`, { query, category, topK, model, temperature });
+  }
+
+  /**
+   * FASE 3: MCP Tools - Usa ferramentas externas.
+   */
+  ragPhase3(query: string, toolName: string, model = 'llama2', temperature = 0.5): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/phase3`, { query, toolName, model, temperature });
+  }
+
+  /**
+   * FASE 4: Agentic Loop - Decisão autônoma com múltiplas iterações.
+   */
+  ragPhase4(query: string, model = 'llama2', temperature = 0.8, maxIterations = 5): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/phase4`, { query, model, temperature, maxIterations });
+  }
+
+  /**
+   * Indexa novo documento para RAG.
+   */
+  indexDocument(title: string, content: string, source: string, category: string): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/documents`, { title, content, source, category });
   }
 }

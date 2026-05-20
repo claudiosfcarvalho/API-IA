@@ -74,13 +74,36 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.14.1</version>
+                <configuration>
+                    <release>25</release>
+                    <!-- Allow access to internal APIs needed by dependencies like Guice -->
+                    <compilerArgs>
+                        <arg>--add-opens=java.base/sun.misc=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Suppress sun.misc.Unsafe warnings from Guice -->
+                    <jvmArguments>
+                        --add-opens java.base/sun.misc=ALL-UNNAMED
+                        -XX:+IgnoreUnrecognizedVMOptions
+                    </jvmArguments>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
+                <configuration>
+                    <!-- Suppress sun.misc.Unsafe warnings from Guice -->
+                    <argLine>--add-opens java.base/sun.misc=ALL-UNNAMED -XX:+IgnoreUnrecognizedVMOptions</argLine>
+                </configuration>
             </plugin>
         </plugins>
     </build>

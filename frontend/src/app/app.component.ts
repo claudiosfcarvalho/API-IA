@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ApiService, IaResponse, TranscriptionResponse } from './core/api.service';
+import { ApiService, BackendDashboardMetricsResponse, BackendLogTailResponse, IaResponse, TranscriptionResponse } from './core/api.service';
 import { NormalizedApiError, Rfc7807Problem, TechnicalApiError } from './core/api-error.model';
 import { environment } from '../environments/environment';
 
@@ -26,7 +26,7 @@ import { environment } from '../environments/environment';
 })
 export class AppComponent {
   /** Aba ativa atualmente */
-  activeTab: 'assistant' | 'transcription' | 'tts' = 'assistant';
+  activeTab: 'assistant' | 'transcription' | 'tts' | 'rag' = 'assistant';
 
   // === Propriedades de Assistant (IA Local) ===
   /** Texto de entrada para consulta de IA */
@@ -81,6 +81,62 @@ export class AppComponent {
   showDevDebug = false;
   /** Último erro capturado para exibição */
   latestError?: NormalizedApiError;
+  /** Linhas de log ao vivo do backend */
+  liveLogs: string[] = [];
+  /** Cursor da próxima linha de log */
+  liveLogsNextLine = 0;
+  /** Polling de logs em tempo real */
+  logsTimer?: ReturnType<typeof setInterval>;
+  /** Evita sobreposição de chamadas de logs */
+  logsLoading = false;
+  /** Snapshot de métricas do backend */
+  backendMetrics?: BackendDashboardMetricsResponse;
+  /** Snapshot de métricas coletadas no frontend */
+  frontendMetrics: {
+    logicalCores: number;
+    deviceMemoryGb: number;
+    jsHeapUsedMb: number;
+    jsHeapLimitMb: number;
+    networkType: string;
+    downlinkMbps: number;
+    rttMs: number;
+    avgApiLatencyMs: number;
+    dashboardRoundTripMs: number;
+    approxNetworkTransferKb: number;
+  } = {
+    logicalCores: 0,
+    deviceMemoryGb: 0,
+    jsHeapUsedMb: 0,
+    jsHeapLimitMb: 0,
+    networkType: '-',
+    downlinkMbps: 0,
+    rttMs: 0,
+    avgApiLatencyMs: 0,
+    dashboardRoundTripMs: 0,
+    approxNetworkTransferKb: 0
+  };
+  /** Controla polling do dashboard */
+  dashboardTimer?: ReturnType<typeof setInterval>;
+  /** Evita sobreposição de chamadas de métricas */
+  dashboardLoading = false;
+
+  // === Propriedades de RAG ===
+  /** Query para RAG */
+  ragQuery = '';
+  /** Fase RAG selecionada */
+  ragPhase: 1 | 2 | 3 | 4 = 1;
+  /** Resultado RAG */
+  ragResult?: any;
+  /** Indicador de carregamento RAG */
+  ragLoading = false;
+
+  // === Rastreamento de Método Usado ===
+  /** Método usado na última resposta */
+  lastMethodUsed?: string;
+  /** Detalhes de execução da última resposta */
+  lastExecutionDetails?: string;
+  /** Tempo de execução da última operação */
+  lastExecutionTimeMs?: number;
 
   // === Constantes ===
   /** Tamanho máximo permitido para imagens em bytes */
@@ -104,12 +160,20 @@ export class AppComponent {
     });
   }
 
+  ngOnDestroy(): void {
+    this.stopDebugRealtime();
+    if (this.dashboardTimer) {
+      clearInterval(this.dashboardTimer);
+      this.dashboardTimer = undefined;
+    }
+  }
+
   /**
    * Seleciona a aba ativa.
    * 
    * @param tab identificador da aba
    */
-  selectTab(tab: 'assistant' | 'transcription' | 'tts'): void {
+  selectTab(tab: 'assistant' | 'transcription' | 'tts' | 'rag'): void {
     this.activeTab = tab;
   }
 
@@ -295,8 +359,143 @@ export class AppComponent {
     }, 3500);
   }
 
+
   toggleDevDebug(): void {
     this.showDevDebug = !this.showDevDebug;
+    if (this.showDevDebug) {
+      this.startDebugRealtime();
+    } else {
+      this.stopDebugRealtime();
+    }
+  }
+
+  private startDebugRealtime(): void {
+    this.refreshDashboardMetrics();
+    this.dashboardTimer = setInterval(() => this.refreshDashboardMetrics(), 3000);
+
+    this.startLogPolling();
+  }
+
+  private stopDebugRealtime(): void {
+    this.stopLogPolling();
+    if (this.dashboardTimer) {
+      clearInterval(this.dashboardTimer);
+      this.dashboardTimer = undefined;
+    }
+    this.dashboardLoading = false;
+  }
+
+  private startLogPolling(): void {
+    this.liveLogs = [];
+    this.liveLogsNextLine = 0;
+    this.fetchLogsChunk(400, true);
+    this.logsTimer = setInterval(() => this.fetchLogsChunk(200, false), 1500);
+  }
+
+  private stopLogPolling(): void {
+    if (this.logsTimer) {
+      clearInterval(this.logsTimer);
+      this.logsTimer = undefined;
+    }
+    this.logsLoading = false;
+  }
+
+  private refreshDashboardMetrics(): void {
+    if (!this.showDevDebug) {
+      return;
+    }
+
+    if (this.dashboardLoading) {
+      return;
+    }
+
+    this.dashboardLoading = true;
+    const startedAt = performance.now();
+
+    this.api.getBackendDashboardMetrics().subscribe({
+      next: (metrics) => {
+        this.backendMetrics = metrics;
+        this.frontendMetrics.dashboardRoundTripMs = Math.round(performance.now() - startedAt);
+        this.collectFrontendMetrics();
+      },
+      error: () => {
+        this.collectFrontendMetrics();
+        this.dashboardLoading = false;
+      },
+      complete: () => {
+        this.dashboardLoading = false;
+      }
+    });
+  }
+
+  private fetchLogsChunk(limit: number, catchUp: boolean): void {
+    if (!this.showDevDebug || this.logsLoading) {
+      return;
+    }
+
+    this.logsLoading = true;
+    this.api.getBackendLogTail(this.liveLogsNextLine, limit).subscribe({
+      next: (response: BackendLogTailResponse) => {
+        this.liveLogsNextLine = response.nextLine;
+        if (response.lines?.length) {
+          this.liveLogs = [...this.liveLogs, ...response.lines].slice(-1200);
+        }
+        if (catchUp && response.lines?.length === limit) {
+          this.logsLoading = false;
+          this.fetchLogsChunk(limit, true);
+          return;
+        }
+      },
+      error: () => {
+        this.logsLoading = false;
+      },
+      complete: () => {
+        this.logsLoading = false;
+      }
+    });
+  }
+
+  private collectFrontendMetrics(): void {
+    const navAny = navigator as any;
+    const connection = navAny.connection || navAny.mozConnection || navAny.webkitConnection;
+    const perfAny = performance as any;
+    const memory = perfAny.memory;
+
+    const resourceEntries = performance
+      .getEntriesByType('resource')
+      .filter((entry) => (entry as PerformanceResourceTiming).name?.includes('/api/')) as PerformanceResourceTiming[];
+
+    const recentEntries = resourceEntries.slice(-10);
+    const avgApiLatency = recentEntries.length
+      ? recentEntries.reduce((acc, entry) => acc + entry.duration, 0) / recentEntries.length
+      : 0;
+    const transferKb = recentEntries.length
+      ? recentEntries.reduce((acc, entry) => acc + (entry.transferSize || 0), 0) / 1024
+      : 0;
+
+    this.frontendMetrics = {
+      logicalCores: navigator.hardwareConcurrency || 0,
+      deviceMemoryGb: navAny.deviceMemory || 0,
+      jsHeapUsedMb: memory ? Math.round(memory.usedJSHeapSize / (1024 * 1024)) : 0,
+      jsHeapLimitMb: memory ? Math.round(memory.jsHeapSizeLimit / (1024 * 1024)) : 0,
+      networkType: connection?.effectiveType || '-',
+      downlinkMbps: connection?.downlink || 0,
+      rttMs: connection?.rtt || 0,
+      avgApiLatencyMs: Math.round(avgApiLatency),
+      dashboardRoundTripMs: this.frontendMetrics.dashboardRoundTripMs,
+      approxNetworkTransferKb: Math.round(transferKb)
+    };
+  }
+
+  formatUptime(ms?: number): string {
+    if (!ms || ms <= 0) {
+      return '-';
+    }
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${h}h ${m}m ${s}s`;
   }
 
   devDebugSnapshot(): string {
@@ -352,5 +551,46 @@ export class AppComponent {
       return payload as Rfc7807Problem;
     }
     return undefined;
+  }
+
+  // ==================== RAG Methods ====================
+
+  executeRag(): void {
+    if (!this.ragQuery.trim()) {
+      this.showToast('Informe uma pergunta para RAG.', 'error');
+      return;
+    }
+
+    this.ragLoading = true;
+    this.ragResult = undefined;
+    this.lastMethodUsed = undefined;
+    this.lastExecutionDetails = undefined;
+
+    const startTime = performance.now();
+
+    const ragObservable = this.ragPhase === 1
+      ? this.api.ragPhase1(this.ragQuery, 'MotoGP', 3)
+      : this.ragPhase === 2
+      ? this.api.ragPhase2(this.ragQuery, 'MotoGP', 5, 'llama2', 0.7)
+      : this.ragPhase === 3
+      ? this.api.ragPhase3(this.ragQuery, 'search_motogp', 'llama2', 0.5)
+      : this.api.ragPhase4(this.ragQuery, 'llama2', 0.8, 5);
+
+    ragObservable.subscribe({
+      next: (response) => {
+        this.ragResult = response;
+        this.lastMethodUsed = response.method || `FASE ${this.ragPhase}`;
+        this.lastExecutionDetails = response.executionDetails;
+        this.lastExecutionTimeMs = Math.round(performance.now() - startTime);
+        this.latestError = undefined;
+        this.showToast(`Fase ${this.ragPhase} executada com sucesso em ${this.lastExecutionTimeMs}ms`, 'success');
+      },
+      error: (error) => {
+        this.handleApiError(error);
+      },
+      complete: () => {
+        this.ragLoading = false;
+      }
+    });
   }
 }

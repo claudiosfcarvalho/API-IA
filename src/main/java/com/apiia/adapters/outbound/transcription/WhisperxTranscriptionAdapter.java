@@ -11,18 +11,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.FileSystemResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class WhisperxTranscriptionAdapter implements TranscriptionPort {
@@ -42,8 +44,8 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
     @Override
     public TranscriptionPortResult transcribe(Path audioPath, TranscriptionCommand command) {
         try {
-            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-            body.add("audio_file", new FileSystemResource(audioPath));
+            String boundary = "----apiia-" + UUID.randomUUID();
+            byte[] body = buildMultipartBody(audioPath, boundary);
 
             long start = System.nanoTime();
             String response = restClient.post()
@@ -65,7 +67,7 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
                         }
                         return uriBuilder.build();
                     })
-                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.MULTIPART_FORM_DATA_VALUE + "; boundary=" + boundary)
                     .body(body)
                     .retrieve()
                     .onStatus(status -> status.value() == 413,
@@ -108,6 +110,22 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
             throw new AppException(ErrorCode.TRANSCRIPTION_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR,
                     "Falha na chamada ao WhisperX", java.util.Map.of("reason", ex.getMessage()));
         }
+    }
+
+    private static byte[] buildMultipartBody(Path audioPath, String boundary) throws IOException {
+        byte[] audioBytes = Files.readAllBytes(audioPath);
+        String filename = audioPath.getFileName() != null ? audioPath.getFileName().toString() : "audio.wav";
+        String lineBreak = "\r\n";
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(("--" + boundary + lineBreak).getBytes());
+        out.write(("Content-Disposition: form-data; name=\"audio_file\"; filename=\"" + filename + "\"" + lineBreak).getBytes());
+        out.write(("Content-Type: application/octet-stream" + lineBreak + lineBreak).getBytes());
+        out.write(audioBytes);
+        out.write(lineBreak.getBytes());
+
+        out.write(("--" + boundary + "--" + lineBreak).getBytes());
+        return out.toByteArray();
     }
 
     private static String readText(JsonNode node, String key) {

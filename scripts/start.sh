@@ -71,9 +71,10 @@ echo "[start] Infra OK."
 ################################################################################
 # Etapa 4: Backend Spring Boot
 ################################################################################
-echo "[start] Iniciando backend Spring Boot..."
-nohup mvn spring-boot:run > "$ROOT_DIR/logs/backend.log" 2>&1 &
+echo "[start] Iniciando backend Spring Boot na porta 8080..."
+nohup java -jar "$ROOT_DIR/backend/target/api-ia.jar" > "$ROOT_DIR/logs/backend.log" 2>&1 &
 echo $! > "$ROOT_DIR/.run/backend.pid"
+echo "[start] Backend iniciado com PID=$(cat "$ROOT_DIR/.run/backend.pid")"
 
 echo "[start] Aguardando backend em http://localhost:8080/actuator/health ..."
 for i in {1..120}; do
@@ -91,10 +92,28 @@ done
 ################################################################################
 # Etapa 5: Frontend Angular
 ################################################################################
-echo "[start] Iniciando frontend Angular..."
+echo "[start] Iniciando frontend Angular na porta 4200..."
 cd "$ROOT_DIR/frontend"
-nohup npm start -- --host 0.0.0.0 --port 4200 > "$ROOT_DIR/logs/frontend.log" 2>&1 &
-echo $! > "$ROOT_DIR/.run/frontend.pid"
+npm start > "$ROOT_DIR/logs/frontend.log" 2>&1 &
+FRONT_BOOT_PID=$!
+
+# Em Git Bash no Windows, o PID de "npm start" pode nao ser o processo final do servidor.
+# Aguarda a porta 4200 e tenta capturar o PID real via netstat.
+FRONT_PORT_PID=""
+for i in {1..60}; do
+  FRONT_PORT_PID="$(netstat -ano 2>/dev/null | grep -E "[:.]4200" | awk '/LISTENING|ESTABLISHED/ {print $NF; exit}' | tr -d '\r' || true)"
+  if [[ -n "$FRONT_PORT_PID" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ -n "$FRONT_PORT_PID" ]]; then
+  echo "$FRONT_PORT_PID" > "$ROOT_DIR/.run/frontend.pid"
+else
+  echo "$FRONT_BOOT_PID" > "$ROOT_DIR/.run/frontend.pid"
+fi
+echo "[start] Frontend iniciado com PID=$(cat "$ROOT_DIR/.run/frontend.pid")"
 
 cd "$ROOT_DIR"
 

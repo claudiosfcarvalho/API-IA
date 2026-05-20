@@ -15,6 +15,7 @@
     <button [class.active]="activeTab === 'assistant'" (click)="selectTab('assistant')">Assistente IA</button>
     <button [class.active]="activeTab === 'transcription'" (click)="selectTab('transcription')">Transcricao</button>
     <button [class.active]="activeTab === 'tts'" (click)="selectTab('tts')">Texto para Audio</button>
+    <button [class.active]="activeTab === 'rag'" (click)="selectTab('rag')" style="border-left: 2px solid #ff9800;">RAG Estudo</button>
   </nav>
 
   <section class="card" *ngIf="activeTab === 'assistant'">
@@ -46,12 +47,6 @@
     <article class="result" *ngIf="assistantResult">
       <h3>Resposta</h3>
       <p class="answer">{{ assistantResult.answer }}</p>
-      <div class="meta-grid">
-        <div><strong>Model:</strong> {{ assistantResult.model }}</div>
-        <div><strong>Correlation:</strong> {{ assistantResult.correlationId }}</div>
-        <div><strong>Tempo:</strong> {{ assistantResult.metrics.processingTimeMs }} ms</div>
-        <div><strong>Tokens:</strong> {{ assistantResult.metrics.totalTokens }}</div>
-      </div>
     </article>
   </section>
 
@@ -135,29 +130,183 @@
 
   <div class="toast" *ngIf="toastMessage" [class.error]="toastType === 'error'">{{ toastMessage }}</div>
 
-  <section class="card dev-debug-panel" *ngIf="devMode && showDevDebug">
-    <h2>DEV DEBUG - Erros da API</h2>
-    <p>Formato RFC 7807 com separacao entre erro funcional e tecnico.</p>
+  <section class="card" *ngIf="activeTab === 'rag'">
+    <h2>RAG em 4 Fases - Estudo Educacional</h2>
+    <p style="font-size: 0.9em; color: #666; margin-bottom: 1.5em;">
+      Demonstra os 4 padrões de RAG: Retrieval Puro, Retrieval+LLM, MCP Tools, e Agentic Loop. 
+      Especializado em MotoGP. Respostas em português BR com detalhes de execução.
+    </p>
 
-    <div class="debug-grid" *ngIf="latestError; else noDebugError">
-      <article class="debug-block">
-        <h3>Erro funcional</h3>
-        <p><strong>Codigo:</strong> {{ latestError.functional.code }}</p>
-        <p><strong>Mensagem:</strong> {{ latestError.functional.message }}</p>
+    <div class="inline-grid">
+      <div>
+        <label>Query</label>
+        <input [(ngModel)]="ragQuery" placeholder="Ex: Qual é o cilindrada máximo em MotoGP?" />
+      </div>
+      <div>
+        <label>Fase</label>
+        <select [(ngModel)]="ragPhase">
+          <option [value]="1">Fase 1: RAG Only</option>
+          <option [value]="2">Fase 2: RAG + LLM</option>
+          <option [value]="3">Fase 3: MCP Tools</option>
+          <option [value]="4">Fase 4: Agentic Loop</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="primary" [disabled]="ragLoading" (click)="executeRag()">
+      {{ ragLoading ? 'Processando...' : `Executar Fase ${ragPhase}` }}
+    </button>
+
+    <article class="result" *ngIf="ragResult">
+      <div class="result-head">
+        <h3>Resposta - Método: {{ lastMethodUsed }}</h3>
+        <small style="color: #666;">Tempo: {{ lastExecutionTimeMs }}ms</small>
+      </div>
+
+      <div *ngIf="ragPhase === 1" style="background: #f5f5f5; padding: 1em; border-radius: 4px; margin-bottom: 1em;">
+        <h4>📊 Contexto Recuperado (RAG Only)</h4>
+        <pre style="font-size: 0.85em; overflow-x: auto;">{{ ragResult.context }}</pre>
+      </div>
+
+      <div *ngIf="ragPhase === 2" style="background: #f5f5f5; padding: 1em; border-radius: 4px; margin-bottom: 1em;">
+        <h4>🚀 Resposta Inteligente (RAG + LLM)</h4>
+        <p class="answer">{{ ragResult.answer }}</p>
+        <small style="color: #666;">Chunks usados: {{ ragResult.chunksUsed }} | Modelo: {{ ragResult.metrics?.model }}</small>
+      </div>
+
+      <div *ngIf="ragPhase === 3" style="background: #f5f5f5; padding: 1em; border-radius: 4px; margin-bottom: 1em;">
+        <h4>🔧 Resultado com MCP (Tools)</h4>
+        <p><strong>Ferramenta:</strong> {{ ragResult.toolExecuted }}</p>
+        <p><strong>Resultado da ferramenta:</strong></p>
+        <pre style="font-size: 0.85em; overflow-x: auto;">{{ ragResult.toolOutput }}</pre>
+        <p><strong>Interpretação LLM:</strong></p>
+        <p class="answer">{{ ragResult.llmResponse }}</p>
+      </div>
+
+      <div *ngIf="ragPhase === 4" style="background: #f5f5f5; padding: 1em; border-radius: 4px; margin-bottom: 1em;">
+        <h4>🤖 Resultado Agêntico (Loop Autônomo)</h4>
+        <p><strong>Resposta Final:</strong></p>
+        <p class="answer">{{ ragResult.answer }}</p>
+        <p><strong>Caminho de Decisão:</strong> {{ ragResult.decisionPath }}</p>
+        <p><strong>Iterações:</strong> {{ ragResult.iterationsUsed }} | <strong>Chamadas RAG:</strong> {{ ragResult.metrics?.ragCalls }} | <strong>Chamadas MCP:</strong> {{ ragResult.metrics?.mcpCalls }}</p>
+      </div>
+
+      <div style="background: #fffde7; padding: 1em; border-left: 4px solid #fbc02d; margin-top: 1em;">
+        <h4>📚 Detalhes Educacionais</h4>
+        <pre style="font-size: 0.8em; overflow-x: auto; max-height: 300px;">{{ lastExecutionDetails }}</pre>
+      </div>
+    </article>
+  </section>
+
+  <div class="toast" *ngIf="toastMessage" [class.error]="toastType === 'error'">{{ toastMessage }}</div>
+
+  <section class="card dev-debug-panel" *ngIf="devMode && showDevDebug">
+    <div class="debug-split-grid">
+      <article class="debug-side-card">
+        <h2>DEV DEBUG - Info Execução</h2>
+        
+        <div class="debug-grid" *ngIf="lastMethodUsed; else noMethodInfo">
+          <article class="debug-block">
+            <h3>🎯 Última Operação</h3>
+            <p><strong>Método Usado:</strong> {{ lastMethodUsed }}</p>
+            <p><strong>Tempo Execução:</strong> {{ lastExecutionTimeMs }} ms</p>
+          </article>
+        </div>
+
+        <ng-template #noMethodInfo>
+          <div class="debug-empty">Nenhuma operação executada ainda.</div>
+        </ng-template>
+
+        <h2 style="margin-top: 1.5em;">DEV DEBUG - Erros da API</h2>
+        <p>Formato RFC 7807 com separacao entre erro funcional e tecnico.</p>
+
+        <div class="debug-grid" *ngIf="latestError; else noDebugError">
+          <article class="debug-block">
+            <h3>Erro funcional</h3>
+            <p><strong>Codigo:</strong> {{ latestError.functional.code }}</p>
+            <p><strong>Mensagem:</strong> {{ latestError.functional.message }}</p>
+          </article>
+
+          <article class="debug-block">
+            <h3>Erro tecnico</h3>
+            <p><strong>Correlation ID:</strong> {{ latestError.technical.correlationId || '-' }}</p>
+            <p><strong>Status:</strong> {{ latestError.technical.status || '-' }}</p>
+            <p><strong>Timestamp:</strong> {{ latestError.technical.timestamp || '-' }}</p>
+          </article>
+        </div>
+
+        <ng-template #noDebugError>
+          <div class="debug-empty">Nenhum erro disponivel no momento.</div>
+        </ng-template>
+
+        <pre class="debug-json">{{ devDebugSnapshot() }}</pre>
       </article>
 
-      <article class="debug-block">
-        <h3>Erro tecnico</h3>
-        <p><strong>Correlation ID:</strong> {{ latestError.technical.correlationId || '-' }}</p>
-        <p><strong>Status:</strong> {{ latestError.technical.status || '-' }}</p>
-        <p><strong>Timestamp:</strong> {{ latestError.technical.timestamp || '-' }}</p>
+      <article class="debug-side-card">
+        <h2>Logs ao vivo do backend</h2>
+        <pre class="debug-json" style="max-height:300px;overflow:auto;">
+          <ng-container *ngFor="let line of liveLogs">{{ line }}&#10;</ng-container>
+        </pre>
       </article>
     </div>
 
-    <ng-template #noDebugError>
-      <div class="debug-empty">Nenhum erro disponivel no momento.</div>
-    </ng-template>
+    <article class="dashboard-card" style="margin-top: 2em;">
+      <div class="dashboard-head">
+        <h2>📊 Dashboard Tempo Real</h2>
+        <span class="dashboard-status" [class.loading]="dashboardLoading">{{ dashboardLoading ? 'Atualizando...' : 'Tempo real' }}</span>
+      </div>
 
-    <pre class="debug-json">{{ devDebugSnapshot() }}</pre>
+      <div class="dashboard-grid">
+        <article class="metric-block">
+          <h3>Ultima Resposta IA</h3>
+          <p><strong>Model:</strong> {{ assistantResult?.model || '-' }}</p>
+          <p><strong>Correlation:</strong> {{ assistantResult?.correlationId || '-' }}</p>
+          <p><strong>Tempo:</strong> {{ assistantResult?.metrics?.processingTimeMs || 0 }} ms</p>
+          <p><strong>Tokens:</strong> {{ assistantResult?.metrics?.totalTokens || 0 }}</p>
+        </article>
+
+        <article class="metric-block">
+          <h3>Backend CPU e Latencia</h3>
+          <p><strong>CPU processo:</strong> {{ backendMetrics?.cpu?.processCpuPct || 0 }}%</p>
+          <p><strong>CPU sistema:</strong> {{ backendMetrics?.cpu?.systemCpuPct || 0 }}%</p>
+          <p><strong>Load:</strong> {{ backendMetrics?.cpu?.systemLoadPct || 0 }}%</p>
+            <p><strong>Latencia backend:</strong> {{ backendMetrics?.latency?.processingTimeMs || 0 }} ms</p>
+          </article>
+
+          <article class="metric-block">
+            <h3>Backend Memoria e JVM</h3>
+            <p><strong>Heap:</strong> {{ backendMetrics?.memory?.heapUsedMb || 0 }} / {{ backendMetrics?.memory?.heapMaxMb || 0 }} MB</p>
+            <p><strong>Uso heap:</strong> {{ backendMetrics?.memory?.heapUsagePct || 0 }}%</p>
+            <p><strong>Memoria sistema:</strong> {{ backendMetrics?.memory?.systemFreeMemoryMb || 0 }} / {{ backendMetrics?.memory?.systemTotalMemoryMb || 0 }} MB livre</p>
+            <p><strong>Threads:</strong> {{ backendMetrics?.jvm?.threadCount || 0 }} (pico {{ backendMetrics?.jvm?.peakThreadCount || 0 }})</p>
+            <p><strong>Uptime:</strong> {{ formatUptime(backendMetrics?.jvm?.uptimeMs) }}</p>
+          </article>
+
+          <article class="metric-block">
+            <h3>Backend Rede</h3>
+            <p><strong>Interfaces:</strong> {{ backendMetrics?.network?.interfaceCount || 0 }}</p>
+            <p><strong>Ativas:</strong> {{ backendMetrics?.network?.activeInterfaces || 0 }}</p>
+            <p><strong>Loopback:</strong> {{ backendMetrics?.network?.loopbackInterfaces || 0 }}</p>
+            <p><strong>IPv4:</strong> {{ (backendMetrics?.network?.ipv4Addresses || []).join(', ') || '-' }}</p>
+          </article>
+
+          <article class="metric-block">
+            <h3>Frontend CPU e Memoria</h3>
+            <p><strong>Nucleos logicos:</strong> {{ frontendMetrics.logicalCores }}</p>
+            <p><strong>Memoria dispositivo:</strong> {{ frontendMetrics.deviceMemoryGb }} GB</p>
+            <p><strong>JS Heap:</strong> {{ frontendMetrics.jsHeapUsedMb }} / {{ frontendMetrics.jsHeapLimitMb }} MB</p>
+          </article>
+
+          <article class="metric-block">
+            <h3>Frontend Rede e Latencia</h3>
+            <p><strong>Tipo de rede:</strong> {{ frontendMetrics.networkType }}</p>
+            <p><strong>Downlink:</strong> {{ frontendMetrics.downlinkMbps }} Mbps</p>
+            <p><strong>RTT:</strong> {{ frontendMetrics.rttMs }} ms</p>
+            <p><strong>Latencia media API:</strong> {{ frontendMetrics.avgApiLatencyMs }} ms</p>
+            <p><strong>Round-trip dashboard:</strong> {{ frontendMetrics.dashboardRoundTripMs }} ms</p>
+            <p><strong>Transferencia aprox (ult. chamadas):</strong> {{ frontendMetrics.approxNetworkTransferKb }} KB</p>
+          </article>
+        </div>
+      </article>
   </section>
 </div>

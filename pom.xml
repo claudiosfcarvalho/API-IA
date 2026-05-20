@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.0</version>
+        <version>3.5.14</version>
         <relativePath/>
     </parent>
 
@@ -20,8 +20,8 @@
     <properties>
         <java.version>25</java.version>
         <maven.compiler.release>25</maven.compiler.release>
-        <langchain4j.version>0.35.0</langchain4j.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <langchain4j.version>0.36.1</langchain4j.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
     </properties>
 
     <dependencies>

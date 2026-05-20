@@ -38,8 +38,8 @@ class TranscriptionControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
-    private TranscribeAudioUseCase useCase;
+        @MockBean
+        private TranscribeAudioUseCase useCase;
 
         @MockBean
         private TranscribeUploadedAudioUseCase uploadUseCase;

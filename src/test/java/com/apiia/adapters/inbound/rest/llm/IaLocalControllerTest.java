@@ -27,8 +27,8 @@ class IaLocalControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
-    private GenerateLocalAiResponseUseCase useCase;
+        @MockBean
+        private GenerateLocalAiResponseUseCase useCase;
 
         @MockBean
         private GenerateMultimodalAiResponseUseCase multimodalUseCase;

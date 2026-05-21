@@ -1,6 +1,7 @@
 package com.apiia.adapters.outbound.rag;
 
 import com.apiia.application.ports.out.rag.EmbeddingPort;
+import com.apiia.application.ports.out.rag.DocumentIndexPort;
 import com.apiia.application.ports.out.rag.RetrievalPort;
 import com.apiia.application.ports.out.rag.VectorStorePort;
 import com.apiia.domain.rag.Chunk;
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -25,10 +27,14 @@ public class DefaultRetrievalAdapter implements RetrievalPort {
     
     private final EmbeddingPort embeddingPort;
     private final VectorStorePort vectorStorePort;
+    private final DocumentIndexPort documentIndexPort;
 
-    public DefaultRetrievalAdapter(EmbeddingPort embeddingPort, VectorStorePort vectorStorePort) {
+    public DefaultRetrievalAdapter(EmbeddingPort embeddingPort,
+                                   VectorStorePort vectorStorePort,
+                                   DocumentIndexPort documentIndexPort) {
         this.embeddingPort = embeddingPort;
         this.vectorStorePort = vectorStorePort;
+        this.documentIndexPort = documentIndexPort;
     }
 
     @Override
@@ -52,11 +58,19 @@ public class DefaultRetrievalAdapter implements RetrievalPort {
         // Gera embedding da query
         double[] queryEmbedding = embeddingPort.embed(query);
         
-        // Busca todos os chunks e filtra por categoria e similaridade
-        // NOTA: Em produção, isso seria feito no nível do vector store com filtros de metadados
+        Set<String> categoryDocIds = documentIndexPort.findByCategory(category).stream()
+            .map(doc -> doc.getId())
+            .collect(Collectors.toSet());
+
+        if (categoryDocIds.isEmpty()) {
+            return List.of();
+        }
+
+        // Busca por similaridade e filtra por documentos da categoria.
         List<Chunk> allResults = vectorStorePort.search(queryEmbedding, Integer.MAX_VALUE);
         
         List<Chunk> filtered = allResults.stream()
+            .filter(chunk -> categoryDocIds.contains(chunk.getDocumentId()))
                 .limit(topK)
                 .collect(Collectors.toList());
         

@@ -42,6 +42,10 @@ public class AppProperties {
     @NotNull
     private WebProperties web = new WebProperties();
 
+    @Valid
+    @NotNull
+    private RagProperties rag = new RagProperties();
+
     /**
      * Retorna as propriedades do serviço LLM (Ollama).
      * 
@@ -115,6 +119,14 @@ public class AppProperties {
 
     public void setWeb(WebProperties web) {
         this.web = web;
+    }
+
+    public RagProperties getRag() {
+        return rag;
+    }
+
+    public void setRag(RagProperties rag) {
+        this.rag = rag;
     }
 
     public static class LlmProperties {
@@ -414,6 +426,41 @@ public class AppProperties {
 
         public void setCorsAllowedOrigins(String corsAllowedOrigins) {
             this.corsAllowedOrigins = corsAllowedOrigins;
+        }
+    }
+
+    public static class RagProperties {
+
+        @NotBlank
+        private String knowledgeSourceDir = "knowledge-source";
+
+        @NotBlank
+        private String defaultCategory = "general";
+
+        private boolean bootstrapOnStartup = true;
+
+        public String getKnowledgeSourceDir() {
+            return knowledgeSourceDir;
+        }
+
+        public void setKnowledgeSourceDir(String knowledgeSourceDir) {
+            this.knowledgeSourceDir = knowledgeSourceDir;
+        }
+
+        public String getDefaultCategory() {
+            return defaultCategory;
+        }
+
+        public void setDefaultCategory(String defaultCategory) {
+            this.defaultCategory = defaultCategory;
+        }
+
+        public boolean isBootstrapOnStartup() {
+            return bootstrapOnStartup;
+        }
+
+        public void setBootstrapOnStartup(boolean bootstrapOnStartup) {
+            this.bootstrapOnStartup = bootstrapOnStartup;
         }
     }
 }

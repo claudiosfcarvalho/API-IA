@@ -3,6 +3,9 @@ package com.apiia.adapters.inbound.rest.transcription;
 import com.apiia.adapters.outbound.filesystem.TranscriptDownloadRegistry;
 import com.apiia.application.ports.in.TranscribeAudioUseCase;
 import com.apiia.application.ports.in.TranscribeUploadedAudioUseCase;
+import com.apiia.application.usecases.transcription.TranscriptionAsyncJobService;
+import com.apiia.application.usecases.transcription.TranscriptionJobSnapshot;
+import com.apiia.application.usecases.transcription.TranscriptionJobStatus;
 import com.apiia.application.usecases.transcription.TranscriptionResult;
 import com.apiia.application.usecases.transcription.TranscriptionSegment;
 import com.apiia.common.error.AppException;
@@ -46,6 +49,9 @@ class TranscriptionControllerTest {
 
         @MockitoBean
         private TranscriptDownloadRegistry downloadRegistry;
+
+        @MockitoBean
+        private TranscriptionAsyncJobService transcriptionAsyncJobService;
 
     @Test
     void shouldReturnTranscriptionSuccess() throws Exception {
@@ -130,4 +136,37 @@ class TranscriptionControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.functional.code").value("TRANSCRIPTION_DOWNLOAD_NOT_FOUND"));
     }
+
+        @Test
+        void shouldStartAsyncTranscriptionJob() throws Exception {
+                when(transcriptionAsyncJobService.submitUpload(any(), any(), any(), any())).thenReturn("job-1");
+
+                MockMultipartFile audio = new MockMultipartFile("file", "a.wav", "audio/wav", "abc".getBytes());
+                mockMvc.perform(multipart("/api/transcricao-audio/upload/async").file(audio))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.jobId").value("job-1"))
+                                .andExpect(jsonPath("$.status").value("QUEUED"));
+        }
+
+        @Test
+        void shouldReturnTranscriptionProgress() throws Exception {
+                when(transcriptionAsyncJobService.getSnapshot("job-1")).thenReturn(new TranscriptionJobSnapshot(
+                                "job-1",
+                                TranscriptionJobStatus.RUNNING,
+                                42,
+                                true,
+                                10_000,
+                                50L,
+                                120L,
+                                null,
+                                "Transcricao em andamento",
+                                null
+                ));
+
+                mockMvc.perform(get("/api/transcricao-audio/progresso/job-1"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.jobId").value("job-1"))
+                                .andExpect(jsonPath("$.status").value("RUNNING"))
+                                .andExpect(jsonPath("$.progressPercent").value(42));
+        }
 }

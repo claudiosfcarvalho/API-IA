@@ -18,6 +18,47 @@ Desenvolvida com **clean architecture**, **RFC 7807** para tratamento de erros, 
 
 ---
 
+## 🔄 Alterações Recentes do Repositório
+
+### Transcrição de Áudio (WhisperX)
+- Controle explícito de timeout de processamento longo por `processingTimeout` (atual: `30m`).
+- Cancelamento da execução assíncrona ao atingir timeout para evitar execução pendurada.
+- Chamada ao WhisperX via `curl` com `--connect-timeout` e `--max-time` usando configurações da aplicação.
+- Mapeamento de timeout do `curl` (código de saída `28`) para erro `TRANSCRIPTION_TIMEOUT` (`504`).
+
+### RAG Local (Backend + Frontend)
+- Endpoints de RAG em `POST /api/rag/documents`, `POST /api/rag/phase1`, `POST /api/rag/phase2`, `POST /api/rag/phase3`, `POST /api/rag/phase4`.
+- Fluxo educacional em 4 fases: RAG puro, RAG + LLM, MCP tools e Agentic loop.
+- Integração já exposta no frontend para indexação e consulta das fases.
+- Persistência de documentos e chunks em H2 (em memória).
+- Carga automática de markdowns da pasta `knowledge-source/` no startup.
+- Reprocessamento por hash para arquivos alterados.
+- Novo endpoint `POST /api/rag/context` para adicionar contexto e indexar imediatamente.
+
+### Configuração Operacional
+- `app.transcription.timeout: 120s`
+- `app.transcription.processingTimeout: 30m`
+- Endpoints de progresso assíncrono: `POST /api/transcricao-audio/upload/async` e `GET /api/transcricao-audio/progresso/{jobId}`
+
+---
+
+## 🗺️ Plano de Evolução
+
+1. Persistir documentos e chunks RAG em H2 (em memória).
+2. Introduzir pasta `knowledge-source/` com arquivos markdown como base de conhecimento.
+3. Carregar markdowns automaticamente no startup da API.
+4. Criar rota de ingestão incremental para salvar markdown na pasta e indexar no banco em memória.
+5. Manter compatibilidade com endpoints RAG atuais.
+6. Adicionar endpoint de progresso de transcrição por `jobId`.
+7. Expor percentual de progresso e métricas (`progressPercent`, `elapsedMs`, `processedSeconds`, `totalSeconds`, `estimated`).
+8. Suportar stream SSE opcional para atualização em tempo real do progresso.
+9. Exibir barra de progresso no frontend para transcrição de arquivos grandes.
+10. Cobrir bootstrap, ingestão e progresso com testes automatizados.
+11. Atualizar documentação operacional e exemplos de payload.
+12. Adicionar reprocessamento por hash para documentos markdown alterados, garantindo consistência entre pasta de conhecimento e índice RAG.
+
+---
+
 ## 🏗️ Arquitetura
 
 ### Stack Tecnológico
@@ -295,6 +336,35 @@ Content-Type: multipart/form-data
 ```
 
 **GET /api/transcricao-audio/{id}** - Download de transcrição
+
+**POST /api/transcricao-audio/upload/async** - Inicia transcrição assíncrona (retorna `jobId`)
+
+**GET /api/transcricao-audio/progresso/{jobId}** - Consulta progresso da transcrição
+
+**GET /api/transcricao-audio/progresso/{jobId}/stream** - Stream SSE de progresso em tempo real
+
+Campos de progresso:
+- `progressPercent`
+- `estimated`
+- `elapsedMs`
+- `processedSeconds`
+- `totalSeconds`
+- `status`: `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`
+
+#### 4️⃣ RAG / Knowledge Source
+
+**POST /api/rag/context** - Salva markdown em `knowledge-source/` e indexa no RAG
+
+Exemplo:
+```json
+{
+  "title": "Regulamento 2026",
+  "contentMarkdown": "# Regras\nConteudo em markdown...",
+  "category": "MotoGP",
+  "source": "manual",
+  "fileName": "regulamento-2026.md"
+}
+```
 
 #### 3️⃣ Síntese de Fala (TTS)
 

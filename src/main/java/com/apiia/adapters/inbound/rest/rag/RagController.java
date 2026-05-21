@@ -37,6 +37,7 @@ public class RagController {
     private final DefaultPhase2RagWithLlmUseCase phase2UseCase;
     private final DefaultPhase3McpToolsUseCase phase3UseCase;
     private final DefaultPhase4AgenticLoopUseCase phase4UseCase;
+    private final KnowledgeSourceIngestionService knowledgeSourceIngestionService;
     private final ObjectMapper objectMapper;
 
     public RagController(DefaultIndexDocumentsUseCase indexUseCase,
@@ -44,12 +45,14 @@ public class RagController {
                         DefaultPhase2RagWithLlmUseCase phase2UseCase,
                         DefaultPhase3McpToolsUseCase phase3UseCase,
                         DefaultPhase4AgenticLoopUseCase phase4UseCase,
+                        KnowledgeSourceIngestionService knowledgeSourceIngestionService,
                         ObjectMapper objectMapper) {
         this.indexUseCase = indexUseCase;
         this.phase1UseCase = phase1UseCase;
         this.phase2UseCase = phase2UseCase;
         this.phase3UseCase = phase3UseCase;
         this.phase4UseCase = phase4UseCase;
+        this.knowledgeSourceIngestionService = knowledgeSourceIngestionService;
         this.objectMapper = objectMapper;
     }
 
@@ -81,6 +84,32 @@ public class RagController {
                 result.message()
         );
     }
+
+            /**
+             * POST /api/rag/context - Adiciona contexto markdown na knowledge-source e indexa no RAG.
+             */
+            @PostMapping("/context")
+            @ResponseStatus(HttpStatus.CREATED)
+            public AddContextResponse addContext(@RequestBody AddContextRequest request) {
+            KnowledgeIngestionResult result = knowledgeSourceIngestionService.ingestAndPersist(
+                request.title(),
+                request.contentMarkdown(),
+                request.category(),
+                request.source(),
+                request.fileName()
+            );
+
+            return new AddContextResponse(
+                MDC.get(CorrelationId.MDC_KEY),
+                result.documentId(),
+                result.source(),
+                result.filePath(),
+                result.chunksCreated(),
+                result.skipped(),
+                result.updated(),
+                result.message()
+            );
+            }
 
     /**
      * POST /api/rag/phase1 - FASE 1: RAG Only (Retrieval Puro).
@@ -265,6 +294,14 @@ public class RagController {
         Integer topK
     ) {}
 
+    public record AddContextRequest(
+        String title,
+        String contentMarkdown,
+        String category,
+        String source,
+        String fileName
+    ) {}
+
     public record RagPhase2Request(
         String query,
         String category,
@@ -293,6 +330,17 @@ public class RagController {
         String correlationId,
         String documentId,
         int chunksCreated,
+        String message
+    ) {}
+
+    public record AddContextResponse(
+        String correlationId,
+        String documentId,
+        String source,
+        String filePath,
+        int chunksCreated,
+        boolean skipped,
+        boolean updated,
         String message
     ) {}
 

@@ -3,7 +3,9 @@ package com.apiia.adapters.inbound.rest.transcription;
 import com.apiia.adapters.outbound.filesystem.TranscriptDownloadRegistry;
 import com.apiia.application.ports.in.TranscribeAudioUseCase;
 import com.apiia.application.ports.in.TranscribeUploadedAudioUseCase;
+import com.apiia.application.usecases.transcription.TranscriptionAsyncJobService;
 import com.apiia.application.usecases.transcription.TranscriptionCommand;
+import com.apiia.application.usecases.transcription.TranscriptionJobSnapshot;
 import com.apiia.application.usecases.transcription.TranscriptionResult;
 import com.apiia.common.correlation.CorrelationId;
 import com.apiia.common.error.AppException;
@@ -26,10 +28,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Controlador REST para requisições de transcrição de áudio.
@@ -49,7 +54,9 @@ public class TranscriptionController {
 
     private final TranscribeAudioUseCase useCase;
     private final TranscribeUploadedAudioUseCase uploadUseCase;
+        private final TranscriptionAsyncJobService transcriptionAsyncJobService;
     private final TranscriptDownloadRegistry downloadRegistry;
+        private final ExecutorService progressStreamExecutor = Executors.newCachedThreadPool();
 
     /**
      * Construtor com injeção de dependências.
@@ -60,9 +67,11 @@ public class TranscriptionController {
      */
     public TranscriptionController(TranscribeAudioUseCase useCase,
                                    TranscribeUploadedAudioUseCase uploadUseCase,
+                                                                   TranscriptionAsyncJobService transcriptionAsyncJobService,
                                    TranscriptDownloadRegistry downloadRegistry) {
         this.useCase = useCase;
         this.uploadUseCase = uploadUseCase;
+                this.transcriptionAsyncJobService = transcriptionAsyncJobService;
         this.downloadRegistry = downloadRegistry;
     }
 
@@ -149,6 +158,107 @@ public class TranscriptionController {
         }
     }
 
+    @PostMapping(value = "/transcricao-audio/upload/async", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public TranscriptionAsyncStartResponse transcribeUploadAsync(@RequestPart("file") MultipartFile file,
+                                                                 @RequestParam(value = "language", required = false) String language,
+                                                                 @RequestParam(value = "numSpeakers", required = false) Integer numSpeakers,
+                                                                 @RequestParam(value = "model", required = false) String model,
+                                                                 @RequestParam(value = "diarize", required = false) Boolean diarize) {
+        try {
+            String jobId = transcriptionAsyncJobService.submitUpload(
+                    file.getBytes(),
+                    file.getOriginalFilename(),
+                    file.getContentType(),
+                    new TranscriptionCommand(
+                            null,
+                            language,
+                            numSpeakers == null ? 0 : numSpeakers,
+                            model,
+                            diarize == null || diarize
+                    )
+            );
+
+            return new TranscriptionAsyncStartResponse(
+                    MDC.get(CorrelationId.MDC_KEY),
+                    jobId,
+                    "QUEUED",
+                    0,
+                    true,
+                    "Job de transcricao iniciado"
+            );
+        } catch (IOException ex) {
+            throw new AppException(ErrorCode.INVALID_REQUEST, HttpStatus.BAD_REQUEST,
+                    "Falha ao ler arquivo de upload", java.util.Map.of("reason", ex.getMessage()));
+        }
+    }
+
+    @GetMapping(value = "/transcricao-audio/progresso/{jobId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public TranscriptionProgressResponse getTranscriptionProgress(@PathVariable String jobId) {
+        TranscriptionJobSnapshot snapshot = transcriptionAsyncJobService.getSnapshot(jobId);
+
+        TranscriptionProgressResponse.CompletedResult completedResult = null;
+        if (snapshot.completed() != null) {
+            completedResult = new TranscriptionProgressResponse.CompletedResult(
+                    snapshot.completed().model(),
+                    snapshot.completed().language(),
+                    snapshot.completed().numSpeakers(),
+                    snapshot.completed().transcriptId(),
+                    snapshot.completed().downloadUrl(),
+                    snapshot.completed().outputFile(),
+                    snapshot.completed().transcript(),
+                    snapshot.completed().segments().stream()
+                            .map(s -> new TranscriptionResponse.Segment(s.speaker(), s.startMs(), s.endMs(), s.text()))
+                            .toList(),
+                    snapshot.completed().processingTimeMs()
+            );
+        }
+
+        return new TranscriptionProgressResponse(
+                MDC.get(CorrelationId.MDC_KEY),
+                snapshot.jobId(),
+                snapshot.status().name(),
+                snapshot.progressPercent(),
+                snapshot.estimated(),
+                snapshot.elapsedMs(),
+                snapshot.processedSeconds(),
+                snapshot.totalSeconds(),
+                snapshot.errorCode(),
+                snapshot.message(),
+                completedResult
+        );
+    }
+
+        @GetMapping(value = "/transcricao-audio/progresso/{jobId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+        public SseEmitter streamTranscriptionProgress(@PathVariable String jobId) {
+                SseEmitter emitter = new SseEmitter(0L);
+
+                progressStreamExecutor.submit(() -> {
+                        try {
+                                while (true) {
+                                        TranscriptionJobSnapshot snapshot = transcriptionAsyncJobService.getSnapshot(jobId);
+                                        emitter.send(snapshot, MediaType.APPLICATION_JSON);
+
+                                        String status = snapshot.status().name();
+                                        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "TIMEOUT".equals(status)) {
+                                                emitter.complete();
+                                                break;
+                                        }
+
+                                        Thread.sleep(1500L);
+                                }
+                        } catch (Exception ex) {
+                                emitter.completeWithError(ex);
+                        }
+                });
+
+                emitter.onTimeout(emitter::complete);
+                emitter.onCompletion(() -> {
+                        // no-op: lifecycle handled by Spring after completion.
+                });
+
+                return emitter;
+        }
+
     @GetMapping(value = "/transcricao-audio/download/{transcriptId}")
     public ResponseEntity<Resource> downloadTranscript(@PathVariable String transcriptId) {
         var maybeFile = downloadRegistry.get(transcriptId);
@@ -172,5 +282,42 @@ public class TranscriptionController {
                 .headers(headers)
                 .contentType(MediaType.TEXT_PLAIN)
                 .body(resource);
+    }
+
+    public record TranscriptionAsyncStartResponse(
+            String correlationId,
+            String jobId,
+            String status,
+            int progressPercent,
+            boolean estimated,
+            String message
+    ) {
+    }
+
+    public record TranscriptionProgressResponse(
+            String correlationId,
+            String jobId,
+            String status,
+            int progressPercent,
+            boolean estimated,
+            long elapsedMs,
+            Long processedSeconds,
+            Long totalSeconds,
+            String errorCode,
+            String message,
+            CompletedResult completed
+    ) {
+        public record CompletedResult(
+                String model,
+                String language,
+                int numSpeakers,
+                String transcriptId,
+                String downloadUrl,
+                String outputFile,
+                String transcript,
+                List<TranscriptionResponse.Segment> segments,
+                long processingTimeMs
+        ) {
+        }
     }
 }

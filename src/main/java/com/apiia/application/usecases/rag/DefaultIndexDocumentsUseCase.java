@@ -19,8 +19,8 @@ import java.util.List;
  * 1. Cria documento com metadados
  * 2. Divide conteúdo em chunks (fragmentos)
  * 3. Gera embeddings para cada chunk
- * 4. Armazena chunks no vector store
- * 5. Registra documento no índice
+ * 4. Registra documento no índice
+ * 5. Armazena chunks no vector store
  * 
  * @author API-IA
  * @version 1.0
@@ -81,13 +81,13 @@ public class DefaultIndexDocumentsUseCase {
             document.addChunk(chunk);
         }
 
+        // O documento precisa existir antes de persistir chunks com FK para document_id.
+        documentIndexPort.index(document);
+        logger.debug("Documento registrado no índice");
+
         // Armazena chunks no vector store
         vectorStorePort.storeBatch(chunks);
         logger.debug("Chunks armazenados no vector store");
-
-        // Registra documento no índice
-        documentIndexPort.index(document);
-        logger.debug("Documento registrado no índice");
 
         logger.info("Indexação concluída: {} chunks criados", chunks.size());
 

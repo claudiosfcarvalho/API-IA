@@ -1,0 +1,27 @@
+name: Enforce Main From Develop
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+jobs:
+  validate-source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if PR target is main and source is not develop
+        run: |
+          echo "Base branch: ${{ github.event.pull_request.base.ref }}"
+          echo "Head branch: ${{ github.event.pull_request.head.ref }}"
+
+          if [ "${{ github.event.pull_request.base.ref }}" = "main" ] && [ "${{ github.event.pull_request.head.ref }}" != "develop" ]; then
+            echo "Erro: PR para main deve vir apenas da branch develop."
+            exit 1
+          fi
+
+          echo "Regra atendida."

@@ -1,0 +1,105 @@
+name: Auto PR Feature -> Develop
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - "feat/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    env:
+      AUTO_PR_LABELS: ${{ vars.AUTO_PR_LABELS }}
+      AUTO_PR_REVIEWERS: ${{ vars.AUTO_PR_REVIEWERS }}
+    steps:
+      - name: Create PR when pushing a feature branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = context.ref.replace('refs/heads/', '');
+            const base = 'develop';
+
+            if (head === base || head === 'main') {
+              core.info(`Skipping for branch ${head}.`);
+              return;
+            }
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${head}`,
+              base
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`Open PR already exists: #${existing.data[0].number}`);
+              return;
+            }
+
+            const title = `feat: merge ${head} into ${base}`;
+            const body = [
+              'PR criado automaticamente pelo workflow.',
+              '',
+              `- Origem: \`${head}\``,
+              `- Destino: \`${base}\``
+            ].join('\n');
+
+            const created = await github.rest.pulls.create({
+              owner,
+              repo,
+              head,
+              base,
+              title,
+              body,
+              maintainer_can_modify: true
+            });
+
+            core.info(`Created PR #${created.data.number}`);
+
+            const labels = (process.env.AUTO_PR_LABELS || '')
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean);
+
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: created.data.number,
+                labels
+              });
+              core.info(`Applied labels: ${labels.join(', ')}`);
+            } else {
+              core.info('AUTO_PR_LABELS is empty. Skipping labels.');
+            }
+
+            const reviewers = (process.env.AUTO_PR_REVIEWERS || '')
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean);
+
+            if (reviewers.length > 0) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner,
+                  repo,
+                  pull_number: created.data.number,
+                  reviewers
+                });
+                core.info(`Requested reviewers: ${reviewers.join(', ')}`);
+              } catch (error) {
+                core.warning(`Could not request reviewers: ${error.message}`);
+              }
+            } else {
+              core.info('AUTO_PR_REVIEWERS is empty. Skipping reviewer request.');
+            }

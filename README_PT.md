@@ -32,6 +32,47 @@ A aplicação está estruturada em:
 
 ---
 
+## Alterações Recentes do Repositório
+
+### Transcrição de Áudio (WhisperX)
+- Timeout de processamento longo controlado por `processingTimeout` (atual: `30m` no `application.yml`).
+- Cancelamento explícito da execução assíncrona quando o timeout é atingido, evitando chamadas penduradas.
+- Chamada HTTP via `curl` com `--connect-timeout` e `--max-time` baseada nas propriedades da aplicação.
+- Mapeamento de timeout do `curl` (exit code `28`) para erro funcional `TRANSCRIPTION_TIMEOUT` com status `504`.
+
+### RAG Local (Backend + Frontend)
+- Endpoints RAG disponíveis em `POST /api/rag/documents`, `POST /api/rag/phase1`, `POST /api/rag/phase2`, `POST /api/rag/phase3`, `POST /api/rag/phase4`.
+- Fluxo educacional em 4 fases (RAG puro, RAG + LLM, MCP tools, Agentic loop).
+- Integração no frontend via `api.service.ts` para todas as fases e indexação de documentos.
+- Persistência RAG em H2 (em memória), substituindo armazenamento volátil apenas em maps locais.
+- Bootstrap automático de arquivos markdown da pasta `knowledge-source/` ao subir a API.
+- Reprocessamento por hash para arquivos markdown alterados (evita duplicidade e mantém consistência).
+- Novo endpoint `POST /api/rag/context` para salvar markdown na knowledge-source e indexar imediatamente no RAG.
+
+### Configuração Operacional
+- Timeout de transcrição curto (`timeout`) configurado para `120s`.
+- Timeout de processamento longo (`processingTimeout`) configurado para `30m`.
+- Novos endpoints de transcrição assíncrona com progresso: `POST /api/transcricao-audio/upload/async` e `GET /api/transcricao-audio/progresso/{jobId}`.
+
+---
+
+## Plano de Evolução
+
+1. Persistir documentos e chunks RAG em H2 (modo em memória).
+2. Introduzir pasta `knowledge-source/` para arquivos markdown como fonte canônica.
+3. Carregar automaticamente os markdowns da `knowledge-source/` no startup da API.
+4. Criar ingestão incremental via API para salvar markdown no disco e indexar no banco em memória.
+5. Manter compatibilidade dos endpoints atuais de RAG (`/documents`, `phase1..phase4`).
+6. Adicionar endpoint de progresso de transcrição por `jobId` com status e percentual.
+7. Incluir `progressPercent`, `elapsedMs`, `processedSeconds`, `totalSeconds` e `estimated` na resposta.
+8. Disponibilizar stream opcional de progresso (SSE) para atualização em tempo real no frontend.
+9. Exibir barra de progresso no frontend para arquivos de áudio longos.
+10. Cobrir bootstrap, ingestão e progresso com testes automatizados.
+11. Documentar rotas novas, payloads e fluxo de operação no README.
+12. Adicionar reprocessamento de documentos markdown alterados (detecção por hash) para manter índice e arquivos sempre consistentes.
+
+---
+
 ## Arquitetura
 
 ### Estrutura de Camadas (Backend)
@@ -396,6 +437,44 @@ Faz upload e transcreve arquivo de áudio.
 
 #### GET /api/transcricao-audio/{transcriptId}
 Faz download de transcrição processada.
+
+#### POST /api/transcricao-audio/upload/async
+Inicia transcrição assíncrona e retorna `jobId` imediatamente.
+
+#### GET /api/transcricao-audio/progresso/{jobId}
+Retorna status e percentual de progresso da transcrição (`QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`).
+
+#### GET /api/transcricao-audio/progresso/{jobId}/stream
+Stream SSE de progresso em tempo real (frontend usa SSE com fallback para polling).
+
+Campos principais de progresso:
+- `progressPercent`
+- `estimated`
+- `elapsedMs`
+- `processedSeconds`
+- `totalSeconds`
+- `completed` (presente quando finalizado com sucesso)
+
+### 4. RAG e Knowledge Source
+
+#### POST /api/rag/context
+Adiciona contexto em markdown na base de conhecimento e indexa no RAG.
+
+Payload esperado:
+```json
+{
+  "title": "Regulamento 2026",
+  "contentMarkdown": "# Regras\nConteudo em markdown...",
+  "category": "MotoGP",
+  "source": "manual",
+  "fileName": "regulamento-2026.md"
+}
+```
+
+Comportamento:
+- Salva o markdown em `knowledge-source/`.
+- Executa upsert por `source` e hash de conteúdo.
+- Reindexa automaticamente no H2 em memória.
 
 ### 3. Síntese de Fala (TTS)
 

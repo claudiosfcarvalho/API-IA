@@ -1,7 +1,15 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, ViewChild, AfterViewChecked, ElementRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ApiService, BackendDashboardMetricsResponse, BackendLogTailResponse, IaResponse, TranscriptionResponse } from './core/api.service';
+import { Subscription } from 'rxjs';
+import {
+  ApiService,
+  BackendDashboardMetricsResponse,
+  BackendLogTailResponse,
+  IaResponse,
+  TranscriptionProgressResponse,
+  TranscriptionResponse
+} from './core/api.service';
 import { NormalizedApiError, Rfc7807Problem, TechnicalApiError } from './core/api-error.model';
 import { environment } from '../environments/environment';
 
@@ -54,6 +62,14 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
   transcriptionLoading = false;
   /** Resultado da transcrição */
   transcriptionResult?: TranscriptionResponse;
+  /** Snapshot de progresso da transcricao assincrona */
+  transcriptionProgress?: TranscriptionProgressResponse;
+  /** Job id da transcricao assincrona */
+  transcriptionJobId?: string;
+  /** Stream SSE de progresso */
+  transcriptionProgressStreamSub?: Subscription;
+  /** Polling fallback quando SSE falha */
+  transcriptionProgressPollTimer?: ReturnType<typeof setInterval>;
   /** URL do áudio original para playback */
   originalAudioUrl?: string;
 
@@ -126,6 +142,18 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
   // === Propriedades de RAG ===
   /** Query para RAG */
   ragQuery = '';
+  /** Titulo para novo contexto RAG */
+  ragContextTitle = '';
+  /** Conteudo markdown para novo contexto RAG */
+  ragContextMarkdown = '';
+  /** Categoria do contexto RAG */
+  ragContextCategory = 'MotoGP';
+  /** Nome de arquivo markdown opcional */
+  ragContextFileName = '';
+  /** Indicador de carregamento da ingestao de contexto */
+  ragContextLoading = false;
+  /** Resultado da ingestao de contexto */
+  ragContextResult?: { documentId: string; chunksCreated: number; skipped: boolean; updated: boolean; message: string };
   /** Fase RAG selecionada */
   ragPhase: 1 | 2 | 3 | 4 = 1;
   /** Resultado RAG */
@@ -164,6 +192,7 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.stopTranscriptionTracking();
     this.stopDebugRealtime();
     if (this.dashboardTimer) {
       clearInterval(this.dashboardTimer);
@@ -270,6 +299,9 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
     }
     this.transcriptionFile = file;
     this.originalAudioUrl = URL.createObjectURL(file);
+    this.transcriptionResult = undefined;
+    this.transcriptionProgress = undefined;
+    this.transcriptionJobId = undefined;
   }
 
   sendTranscriptionRequest(): void {
@@ -281,21 +313,99 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
     this.transcriptionLoading = true;
     this.transcriptionResult = undefined;
 
+    this.stopTranscriptionTracking();
     this.api
-      .transcribeUpload(this.transcriptionFile, this.transcriptionLanguage, 0, this.transcriptionModel, true)
+      .startTranscriptionUploadAsync(this.transcriptionFile, this.transcriptionLanguage, 0, this.transcriptionModel, true)
       .subscribe({
         next: response => {
-          this.transcriptionResult = response;
+          this.transcriptionJobId = response.jobId;
+          this.transcriptionProgress = {
+            correlationId: response.correlationId,
+            jobId: response.jobId,
+            status: response.status as any,
+            progressPercent: response.progressPercent,
+            estimated: response.estimated,
+            elapsedMs: 0,
+            message: response.message,
+            completed: null
+          };
+          this.startTranscriptionProgressStream(response.jobId);
           this.latestError = undefined;
-          this.showToast('Transcricao concluida.', 'success');
+          this.showToast('Transcricao iniciada. Acompanhe o progresso em tempo real.', 'success');
         },
         error: error => {
           this.handleApiError(error);
-        },
-        complete: () => {
           this.transcriptionLoading = false;
+        },
+        complete: () => {}
+      });
+  }
+
+  private startTranscriptionProgressStream(jobId: string): void {
+    this.transcriptionProgressStreamSub = this.api.streamTranscriptionProgress(jobId).subscribe({
+      next: (progress) => this.applyTranscriptionProgress(progress),
+      error: () => this.startTranscriptionProgressPolling(jobId)
+    });
+  }
+
+  private startTranscriptionProgressPolling(jobId: string): void {
+    if (this.transcriptionProgressPollTimer) {
+      return;
+    }
+
+    this.transcriptionProgressPollTimer = setInterval(() => {
+      this.api.getTranscriptionProgress(jobId).subscribe({
+        next: (progress) => this.applyTranscriptionProgress(progress),
+        error: () => {
+          if (this.transcriptionProgressPollTimer) {
+            clearInterval(this.transcriptionProgressPollTimer);
+            this.transcriptionProgressPollTimer = undefined;
+          }
         }
       });
+    }, 2000);
+  }
+
+  private applyTranscriptionProgress(progress: TranscriptionProgressResponse): void {
+    this.transcriptionProgress = progress;
+
+    if (progress.status === 'COMPLETED' && progress.completed) {
+      this.transcriptionResult = {
+        correlationId: progress.correlationId,
+        model: progress.completed.model,
+        language: progress.completed.language,
+        numSpeakers: progress.completed.numSpeakers,
+        transcriptId: progress.completed.transcriptId,
+        downloadUrl: progress.completed.downloadUrl,
+        outputFile: progress.completed.outputFile,
+        transcript: progress.completed.transcript,
+        segments: progress.completed.segments,
+        metrics: {
+          processingTimeMs: progress.completed.processingTimeMs
+        }
+      };
+      this.transcriptionLoading = false;
+      this.stopTranscriptionTracking();
+      this.showToast('Transcricao concluida.', 'success');
+      return;
+    }
+
+    if (progress.status === 'FAILED' || progress.status === 'TIMEOUT') {
+      this.transcriptionLoading = false;
+      this.stopTranscriptionTracking();
+      this.showToast(progress.message || 'Falha na transcricao.', 'error');
+    }
+  }
+
+  private stopTranscriptionTracking(): void {
+    if (this.transcriptionProgressStreamSub) {
+      this.transcriptionProgressStreamSub.unsubscribe();
+      this.transcriptionProgressStreamSub = undefined;
+    }
+    if (this.transcriptionProgressPollTimer) {
+      clearInterval(this.transcriptionProgressPollTimer);
+      this.transcriptionProgressPollTimer = undefined;
+    }
   }
 
   downloadTranscript(): void {
@@ -566,6 +676,40 @@ export class AppComponent implements AfterViewChecked, OnDestroy {
   }
 
   // ==================== RAG Methods ====================
+
+  addRagContext(): void {
+    if (!this.ragContextTitle.trim() || !this.ragContextMarkdown.trim()) {
+      this.showToast('Informe titulo e conteudo markdown para adicionar contexto.', 'error');
+      return;
+    }
+
+    this.ragContextLoading = true;
+    this.ragContextResult = undefined;
+
+    this.api.addRagContext(
+      this.ragContextTitle,
+      this.ragContextMarkdown,
+      this.ragContextCategory,
+      undefined,
+      this.ragContextFileName.trim() || undefined
+    ).subscribe({
+      next: (response) => {
+        this.ragContextResult = {
+          documentId: response.documentId,
+          chunksCreated: response.chunksCreated,
+          skipped: response.skipped,
+          updated: response.updated,
+          message: response.message
+        };
+        this.latestError = undefined;
+        this.showToast('Contexto RAG processado com sucesso.', 'success');
+      },
+      error: (error) => this.handleApiError(error),
+      complete: () => {
+        this.ragContextLoading = false;
+      }
+    });
+  }
 
   executeRag(): void {
     if (!this.ragQuery.trim()) {

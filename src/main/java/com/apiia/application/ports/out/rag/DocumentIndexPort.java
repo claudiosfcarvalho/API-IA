@@ -30,6 +30,18 @@ public interface DocumentIndexPort {
     Optional<Document> findById(String documentId);
 
     /**
+     * Busca documento por source lógico (ex.: knowledge-source/arquivo.md).
+     * 
+     * Implementações legadas podem retornar Optional.empty().
+     * 
+     * @param source identificador da origem do documento
+     * @return documento se encontrado
+     */
+    default Optional<Document> findBySource(String source) {
+        return Optional.empty();
+    }
+
+    /**
      * Lista todos os documentos indexados.
      * 
      * @return lista de documentos

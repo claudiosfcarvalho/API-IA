@@ -56,6 +56,39 @@ export interface TranscriptionResponse {
   metrics: { processingTimeMs: number };
 }
 
+export interface TranscriptionAsyncStartResponse {
+  correlationId: string;
+  jobId: string;
+  status: string;
+  progressPercent: number;
+  estimated: boolean;
+  message: string;
+}
+
+export interface TranscriptionProgressResponse {
+  correlationId: string;
+  jobId: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'TIMEOUT';
+  progressPercent: number;
+  estimated: boolean;
+  elapsedMs: number;
+  processedSeconds?: number | null;
+  totalSeconds?: number | null;
+  errorCode?: string | null;
+  message?: string | null;
+  completed?: {
+    model: string;
+    language: string;
+    numSpeakers: number;
+    transcriptId: string;
+    downloadUrl: string;
+    outputFile: string;
+    transcript: string;
+    segments: Array<{ speaker: string; startMs: number; endMs: number; text: string }>;
+    processingTimeMs: number;
+  } | null;
+}
+
 /**
  * Interface para snapshot de métricas do backend.
  */
@@ -189,6 +222,52 @@ export class ApiService {
     return this.http.post<TranscriptionResponse>(`${this.base}/api/transcricao-audio/upload`, body, { params });
   }
 
+  startTranscriptionUploadAsync(file: File, language?: string, numSpeakers?: number, model?: string, diarize = true): Observable<TranscriptionAsyncStartResponse> {
+    const body = new FormData();
+    body.append('file', file);
+
+    let params = new HttpParams().set('diarize', `${diarize}`);
+    if (language?.trim()) {
+      params = params.set('language', language.trim());
+    }
+    if (numSpeakers && numSpeakers > 0) {
+      params = params.set('numSpeakers', `${numSpeakers}`);
+    }
+    if (model?.trim()) {
+      params = params.set('model', model.trim());
+    }
+
+    return this.http.post<TranscriptionAsyncStartResponse>(`${this.base}/api/transcricao-audio/upload/async`, body, { params });
+  }
+
+  getTranscriptionProgress(jobId: string): Observable<TranscriptionProgressResponse> {
+    return this.http.get<TranscriptionProgressResponse>(`${this.base}/api/transcricao-audio/progresso/${jobId}`);
+  }
+
+  streamTranscriptionProgress(jobId: string): Observable<TranscriptionProgressResponse> {
+    return new Observable<TranscriptionProgressResponse>((observer) => {
+      const eventSource = new EventSource(`${this.base}/api/transcricao-audio/progresso/${jobId}/stream`);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as TranscriptionProgressResponse;
+          observer.next(payload);
+        } catch (error) {
+          observer.error(error);
+        }
+      };
+
+      eventSource.onerror = () => {
+        observer.error(new Error('Falha no stream de progresso'));
+        eventSource.close();
+      };
+
+      return () => {
+        eventSource.close();
+      };
+    });
+  }
+
   /**
    * Faz download de arquivo de transcrição já processado.
    * 
@@ -279,5 +358,18 @@ export class ApiService {
    */
   indexDocument(title: string, content: string, source: string, category: string): Observable<any> {
     return this.http.post(`${this.base}/api/rag/documents`, { title, content, source, category });
+  }
+
+  /**
+   * Adiciona contexto em markdown na knowledge-source e indexa no RAG.
+   */
+  addRagContext(title: string, contentMarkdown: string, category?: string, source?: string, fileName?: string): Observable<any> {
+    return this.http.post(`${this.base}/api/rag/context`, {
+      title,
+      contentMarkdown,
+      category,
+      source,
+      fileName
+    });
   }
 }

@@ -71,8 +71,25 @@
     </div>
 
     <button class="primary" [disabled]="transcriptionLoading" (click)="sendTranscriptionRequest()">
-      {{ transcriptionLoading ? 'Transcrevendo...' : 'Iniciar transcricao' }}
+      {{ transcriptionLoading ? 'Transcrevendo... ' + (transcriptionProgress?.progressPercent || 0) + '%' : 'Iniciar transcricao' }}
     </button>
+
+    <article class="progress-panel" *ngIf="transcriptionProgress">
+      <div class="progress-head">
+        <strong>Status:</strong>
+        <span>{{ transcriptionProgress.status }}</span>
+        <span *ngIf="transcriptionJobId">Job: {{ transcriptionJobId }}</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" [style.width.%]="transcriptionProgress.progressPercent"></div>
+      </div>
+      <div class="progress-meta">
+        <span>{{ transcriptionProgress.progressPercent }}%</span>
+        <span>Tempo: {{ transcriptionProgress.elapsedMs }} ms</span>
+        <span *ngIf="transcriptionProgress.estimated">Estimado</span>
+      </div>
+      <small *ngIf="transcriptionProgress.message">{{ transcriptionProgress.message }}</small>
+    </article>
 
     <audio *ngIf="originalAudioUrl" [src]="originalAudioUrl" controls></audio>
 
@@ -136,6 +153,38 @@
       Demonstra os 4 padrões de RAG: Retrieval Puro, Retrieval+LLM, MCP Tools, e Agentic Loop. 
       Especializado em MotoGP. Respostas em português BR com detalhes de execução.
     </p>
+
+    <div class="result" style="border-top: none; padding-top: 0; margin-top: 0;">
+      <h3>Adicionar contexto (Markdown)</h3>
+      <div class="inline-grid">
+        <div>
+          <label>Titulo</label>
+          <input [(ngModel)]="ragContextTitle" placeholder="Ex: Regulamento MotoGP 2026" />
+        </div>
+        <div>
+          <label>Categoria</label>
+          <input [(ngModel)]="ragContextCategory" placeholder="MotoGP" />
+        </div>
+        <div>
+          <label>Arquivo .md (opcional)</label>
+          <input [(ngModel)]="ragContextFileName" placeholder="regulamento-2026.md" />
+        </div>
+      </div>
+      <label>Conteudo markdown</label>
+      <textarea [(ngModel)]="ragContextMarkdown" rows="5" placeholder="# Regras\nConteudo em markdown..."></textarea>
+
+      <button class="primary" [disabled]="ragContextLoading" (click)="addRagContext()">
+        {{ ragContextLoading ? 'Adicionando contexto...' : 'Adicionar contexto no RAG' }}
+      </button>
+
+      <div class="result" *ngIf="ragContextResult">
+        <p><strong>Documento:</strong> {{ ragContextResult.documentId }}</p>
+        <p><strong>Chunks:</strong> {{ ragContextResult.chunksCreated }}</p>
+        <p><strong>Atualizado:</strong> {{ ragContextResult.updated ? 'sim' : 'nao' }}</p>
+        <p><strong>Ignorado (hash igual):</strong> {{ ragContextResult.skipped ? 'sim' : 'nao' }}</p>
+        <p>{{ ragContextResult.message }}</p>
+      </div>
+    </div>
 
     <div class="inline-grid">
       <div>

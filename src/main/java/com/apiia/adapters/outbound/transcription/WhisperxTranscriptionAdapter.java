@@ -11,20 +11,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
-import org.springframework.web.client.RestClient;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class WhisperxTranscriptionAdapter implements TranscriptionPort {
@@ -32,55 +29,80 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
     private static final Logger log = LoggerFactory.getLogger(WhisperxTranscriptionAdapter.class);
 
     private final AppProperties appProperties;
-    private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
-    public WhisperxTranscriptionAdapter(AppProperties appProperties, RestClient.Builder restClientBuilder, ObjectMapper objectMapper) {
+    public WhisperxTranscriptionAdapter(AppProperties appProperties, ObjectMapper objectMapper) {
         this.appProperties = appProperties;
-        this.restClient = restClientBuilder.baseUrl(appProperties.getTranscription().getBaseUrl()).build();
         this.objectMapper = objectMapper;
     }
 
     @Override
     public TranscriptionPortResult transcribe(Path audioPath, TranscriptionCommand command) {
         try {
-            String boundary = "----apiia-" + UUID.randomUUID();
-            byte[] body = buildMultipartBody(audioPath, boundary);
-
+            String uri = buildWhisperxUri(command);
             long start = System.nanoTime();
-            String response = restClient.post()
-                    .uri(uriBuilder -> {
-                        uriBuilder.path("/asr")
-                                .queryParam("output_format", "json")
-                                .queryParam("diarize", command.diarize());
-                        if (command.language() != null && !command.language().isBlank()) {
-                            uriBuilder.queryParam("language", command.language());
-                        }
-                        String model = command.model() == null || command.model().isBlank()
-                                ? appProperties.getTranscription().getDefaultModel()
-                                : command.model();
-                        uriBuilder.queryParam("model", model);
-                        if (command.numSpeakers() > 0) {
-                            uriBuilder.queryParam("num_speakers", command.numSpeakers());
-                            uriBuilder.queryParam("min_speakers", command.numSpeakers());
-                            uriBuilder.queryParam("max_speakers", command.numSpeakers());
-                        }
-                        return uriBuilder.build();
-                    })
-                    .header(HttpHeaders.CONTENT_TYPE, MediaType.MULTIPART_FORM_DATA_VALUE + "; boundary=" + boundary)
-                    .body(body)
-                    .retrieve()
-                    .onStatus(status -> status.value() == 413,
-                            (request, responseRaw) -> {
-                                throw new AppException(ErrorCode.TRANSCRIPTION_FILE_TOO_LARGE, HttpStatus.PAYLOAD_TOO_LARGE,
-                                        "Arquivo rejeitado pelo servico de transcricao");
-                            })
-                        .onStatus(status -> status.is5xxServerError(),
-                            (request, responseRaw) -> {
-                                throw new AppException(ErrorCode.TRANSCRIPTION_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
-                                        "WhisperX retornou erro interno");
-                            })
-                    .body(String.class);
+            long connectTimeoutSeconds = Math.max(1L, appProperties.getTranscription().getTimeout().toSeconds());
+            long processingTimeoutSeconds = Math.max(1L, appProperties.getTranscription().getProcessingTimeout().toSeconds());
+
+            String curlBinary = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
+                ? "curl.exe"
+                : "curl";
+
+            Process process = new ProcessBuilder(
+                curlBinary,
+                "-s",
+                "-w",
+                "\\n%{http_code}",
+                "--connect-timeout",
+                String.valueOf(connectTimeoutSeconds),
+                "--max-time",
+                String.valueOf(processingTimeoutSeconds),
+                "-F",
+                "audio_file=@" + audioPath.toAbsolutePath(),
+                uri
+            )
+                .redirectErrorStream(true)
+                .start();
+
+            boolean finished = process.waitFor(processingTimeoutSeconds + 5, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new AppException(ErrorCode.TRANSCRIPTION_TIMEOUT, HttpStatus.GATEWAY_TIMEOUT,
+                    "Timeout na chamada ao WhisperX");
+            }
+
+            String raw = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+            if (exitCode == 28) {
+                throw new AppException(ErrorCode.TRANSCRIPTION_TIMEOUT, HttpStatus.GATEWAY_TIMEOUT,
+                    "Timeout na chamada ao WhisperX");
+            }
+            throw new AppException(ErrorCode.TRANSCRIPTION_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
+                "Falha ao executar cliente HTTP para WhisperX");
+            }
+
+            int splitIndex = raw.lastIndexOf('\n');
+            if (splitIndex < 0) {
+            throw new AppException(ErrorCode.TRANSCRIPTION_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR,
+                "Resposta invalida do WhisperX", java.util.Map.of("reason", raw));
+            }
+
+            String response = raw.substring(0, splitIndex).trim();
+            int status = Integer.parseInt(raw.substring(splitIndex + 1).trim());
+
+            if (status == 413) {
+            throw new AppException(ErrorCode.TRANSCRIPTION_FILE_TOO_LARGE, HttpStatus.PAYLOAD_TOO_LARGE,
+                "Arquivo rejeitado pelo servico de transcricao");
+            }
+            if (status >= 500) {
+            throw new AppException(ErrorCode.TRANSCRIPTION_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
+                "WhisperX retornou erro interno");
+            }
+            if (status >= 400) {
+            throw new AppException(ErrorCode.TRANSCRIPTION_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR,
+                "Falha na chamada ao WhisperX", java.util.Map.of("reason", status + " " + response));
+            }
 
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             log.info("whisperx response received tookMs={}", elapsedMs);
@@ -103,7 +125,14 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
             return new TranscriptionPortResult(model, language, segments);
         } catch (AppException ex) {
             throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new AppException(ErrorCode.TRANSCRIPTION_TIMEOUT, HttpStatus.GATEWAY_TIMEOUT,
+                    "Timeout na chamada ao WhisperX");
         } catch (ResourceAccessException ex) {
+            throw new AppException(ErrorCode.TRANSCRIPTION_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
+                    "Nao foi possivel conectar ao WhisperX");
+        } catch (java.net.ConnectException ex) {
             throw new AppException(ErrorCode.TRANSCRIPTION_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
                     "Nao foi possivel conectar ao WhisperX");
         } catch (Exception ex) {
@@ -112,20 +141,31 @@ public class WhisperxTranscriptionAdapter implements TranscriptionPort {
         }
     }
 
-    private static byte[] buildMultipartBody(Path audioPath, String boundary) throws IOException {
-        byte[] audioBytes = Files.readAllBytes(audioPath);
-        String filename = audioPath.getFileName() != null ? audioPath.getFileName().toString() : "audio.wav";
-        String lineBreak = "\r\n";
+    private String buildWhisperxUri(TranscriptionCommand command) {
+        StringBuilder uri = new StringBuilder();
+        uri.append(appProperties.getTranscription().getBaseUrl()).append("/asr")
+                .append("?output_format=json")
+                .append("&diarize=").append(command.diarize());
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(("--" + boundary + lineBreak).getBytes());
-        out.write(("Content-Disposition: form-data; name=\"audio_file\"; filename=\"" + filename + "\"" + lineBreak).getBytes());
-        out.write(("Content-Type: application/octet-stream" + lineBreak + lineBreak).getBytes());
-        out.write(audioBytes);
-        out.write(lineBreak.getBytes());
+        if (command.language() != null && !command.language().isBlank()) {
+            uri.append("&language=").append(encode(command.language()));
+        }
 
-        out.write(("--" + boundary + "--" + lineBreak).getBytes());
-        return out.toByteArray();
+        String model = command.model() == null || command.model().isBlank()
+                ? appProperties.getTranscription().getDefaultModel()
+                : command.model();
+        uri.append("&model=").append(encode(model));
+
+        if (command.numSpeakers() > 0) {
+            uri.append("&num_speakers=").append(command.numSpeakers());
+            uri.append("&min_speakers=").append(command.numSpeakers());
+            uri.append("&max_speakers=").append(command.numSpeakers());
+        }
+        return uri.toString();
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static String readText(JsonNode node, String key) {

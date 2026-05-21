@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy } from '@angular/core';
+import { Component, OnDestroy, ViewChild, AfterViewChecked, ElementRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService, BackendDashboardMetricsResponse, BackendLogTailResponse, IaResponse, TranscriptionResponse } from './core/api.service';
 import { NormalizedApiError, Rfc7807Problem, TechnicalApiError } from './core/api-error.model';
@@ -24,7 +24,8 @@ import { environment } from '../environments/environment';
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
 })
-export class AppComponent {
+export class AppComponent implements AfterViewChecked, OnDestroy {
+  @ViewChild('liveLogsContainer') liveLogsContainer?: ElementRef<HTMLDivElement>;
   /** Aba ativa atualmente */
   activeTab: 'assistant' | 'transcription' | 'tts' | 'rag' = 'assistant';
 
@@ -85,6 +86,8 @@ export class AppComponent {
   liveLogs: string[] = [];
   /** Cursor da próxima linha de log */
   liveLogsNextLine = 0;
+  /** Flag para indicar que logs foram atualizados */
+  private logsUpdated = false;
   /** Polling de logs em tempo real */
   logsTimer?: ReturnType<typeof setInterval>;
   /** Evita sobreposição de chamadas de logs */
@@ -165,6 +168,14 @@ export class AppComponent {
     if (this.dashboardTimer) {
       clearInterval(this.dashboardTimer);
       this.dashboardTimer = undefined;
+    }
+  }
+
+  ngAfterViewChecked(): void {
+    if (this.logsUpdated && this.liveLogsContainer) {
+      const element = this.liveLogsContainer.nativeElement;
+      element.scrollTop = element.scrollHeight;
+      this.logsUpdated = false;
     }
   }
 
@@ -439,6 +450,7 @@ export class AppComponent {
         this.liveLogsNextLine = response.nextLine;
         if (response.lines?.length) {
           this.liveLogs = [...this.liveLogs, ...response.lines].slice(-1200);
+          this.logsUpdated = true;
         }
         if (catchUp && response.lines?.length === limit) {
           this.logsLoading = false;

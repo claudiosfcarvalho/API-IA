@@ -2,7 +2,11 @@
 
 > Aplicação full-stack para estudo de IA local com Java, Spring Boot, Angular, Ollama, WhisperX e TTS.
 
-## 📋 Sobre o Projeto
+## �️ Interface
+
+![Mockup do Frontend](docs/mockup-frontend.png)
+
+## �📋 Sobre o Projeto
 
 **API-IA** é uma aplicação educacional que integra três serviços de inteligência artificial em uma plataforma única:
 

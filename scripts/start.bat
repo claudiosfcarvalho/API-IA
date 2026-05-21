@@ -1,58 +1,82 @@
 @echo off
+setlocal EnableExtensions
 
-REM *****************************************************************************
-REM Script de inicialização da aplicação API-IA para Windows (Batch)
-REM
-REM Responsabilidades:
-REM   1. Criar diretórios necessários (.run para PIDs, logs para saída)
-REM   2. Iniciar infraestrutura (Docker Compose com Ollama e WhisperX)
-REM   3. Aguardar disponibilidade de cada serviço (health checks)
-REM   4. Iniciar backend Spring Boot na porta 8080
-REM   5. Iniciar frontend Angular na porta 4200
-REM
-REM Pré-requisitos:
-REM   - Docker instalado e rodando
-REM   - Maven 3.9+ instalado e no PATH
-REM   - Node.js / npm instalado e no PATH
-REM   - curl instalado e no PATH (para health checks)
-REM
-REM Uso: start.bat
-REM *****************************************************************************
+set "ROOT_DIR=%~dp0.."
+set "RUN_DIR=%ROOT_DIR%\.run"
+set "LOG_DIR=%ROOT_DIR%\logs"
+set "TARGET=%~1"
 
-set ROOT_DIR=%~dp0\..
-cd /d %ROOT_DIR%
+if not exist "%RUN_DIR%" mkdir "%RUN_DIR%"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
-REM Criar diretórios necessários
-if not exist "%ROOT_DIR%\.run" mkdir "%ROOT_DIR%\.run"
-if not exist "%ROOT_DIR%\logs" mkdir "%ROOT_DIR%\logs"
+cd /d "%ROOT_DIR%"
 
-REM Etapa 1: Infraestrutura (Docker Compose)
-echo [start] Subindo infraestrutura com docker compose...
-docker compose up -d
+if /I "%TARGET%"=="ia" goto start_ia
+if /I "%TARGET%"=="api" goto start_api
+if /I "%TARGET%"=="frontend" goto start_frontend
 
-REM Etapa 2: Aguardar Ollama (LLM local)
-echo [start] Aguardando Ollama em http://localhost:11434 ...
-for /l %%i in (1,1,60) do (
-    curl -sf http://localhost:11434/ >nul 2>&1 && (
-        echo [start] Ollama pronto.
-        goto :OLLAMA_READY
-    ) || (
-        timeout /t 2 >nul
+echo Uso: scripts\start.bat [ia^|api^|frontend]
+exit /b 1
+
+:start_ia
+echo [start] Subindo containers de IA...
+docker compose up -d ollama whisperx
+exit /b %errorlevel%
+
+:start_api
+netstat -ano | findstr ":8080" | findstr "LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    echo [start] API Java ja esta em execucao na porta 8080.
+    exit /b 0
+)
+
+echo [start] Compilando backend com Maven...
+mvn clean package -f "%ROOT_DIR%\pom.xml"
+if errorlevel 1 exit /b %errorlevel%
+
+set "JAR_PATH="
+for %%F in ("%ROOT_DIR%\target\*.jar") do (
+    echo %%~nxF | findstr /B /C:"original-" >nul 2>&1
+    if errorlevel 1 if not defined JAR_PATH set "JAR_PATH=%%~fF"
+)
+
+if not defined JAR_PATH (
+    echo [start] Nenhum JAR executavel encontrado em target\.
+    exit /b 1
+)
+
+echo [start] Iniciando API Java...
+start "api-ia-backend" /b cmd /c "java -jar ""%JAR_PATH%"" > ""%LOG_DIR%\backend.log"" 2>&1"
+for /l %%I in (1,1,30) do (
+    for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8080" ^| findstr "LISTENING"') do (
+        > "%RUN_DIR%\backend.pid" echo %%P
+        goto api_started
     )
 )
-echo [start] Timeout aguardando Ollama.
-exit /b 1
-:OLLAMA_READY
 
-REM Etapa 3: Backend Spring Boot
-echo [start] Iniciando backend Spring Boot na porta 8080...
-start /b java -jar "%ROOT_DIR%\backend\target\api-ia.jar" > "%ROOT_DIR%\logs\backend.log" 2>&1
-(for /f "tokens=*" %%a in ('wmic process where "commandline like '%%api-ia.jar%%'" get processid ^| findstr /r /v "^$"') do @echo %%a) > "%ROOT_DIR%\.run\backend.pid"
-echo [start] Backend iniciado com PID=%ROOT_DIR%\.run\backend.pid
+:api_started
+echo [start] API Java iniciada.
+exit /b 0
 
-REM Etapa 4: Frontend Angular
-echo [start] Iniciando frontend Angular na porta 4200...
-cd "%ROOT_DIR%\frontend"
-start /b npm start > "%ROOT_DIR%\logs\frontend.log" 2>&1
-(for /f "tokens=*" %%a in ('wmic process where "commandline like '%%npm start%%'" get processid ^| findstr /r /v "^$"') do @echo %%a) > "%ROOT_DIR%\.run\frontend.pid"
-echo [start] Frontend iniciado com PID=%ROOT_DIR%\.run\frontend.pid"
+:start_frontend
+netstat -ano | findstr ":4200" | findstr "LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    echo [start] Frontend ja esta em execucao na porta 4200.
+    exit /b 0
+)
+
+echo [start] Iniciando frontend Angular...
+pushd "%ROOT_DIR%\frontend"
+start "api-ia-frontend" /b cmd /c "npm start > ""%LOG_DIR%\frontend.log"" 2>&1"
+popd
+
+for /l %%I in (1,1,30) do (
+    for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":4200" ^| findstr "LISTENING"') do (
+        > "%RUN_DIR%\frontend.pid" echo %%P
+        goto frontend_started
+    )
+)
+
+:frontend_started
+echo [start] Frontend iniciado.
+exit /b 0

@@ -8,11 +8,15 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.List;
 
 @RestController
@@ -25,7 +29,8 @@ public class LogStreamController {
         SseEmitter emitter = new SseEmitter(0L); // sem timeout
         Path logPath = resolveLogPath();
         new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new FileReader(logPath.toFile()))) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    Files.newInputStream(logPath), safeDecoder()))) {
                 String line;
                 // Skip to end of file for tail -f behavior
                 while (reader.readLine() != null) {}
@@ -62,10 +67,34 @@ public class LogStreamController {
             );
         }
 
+        if (safeFromLine == 0L) {
+            ArrayDeque<String> recentLines = new ArrayDeque<>(safeLimit);
+            long totalLines = 0L;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    Files.newInputStream(logPath), safeDecoder()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (recentLines.size() == safeLimit) {
+                        recentLines.removeFirst();
+                    }
+                    recentLines.addLast(line);
+                    totalLines++;
+                }
+            }
+
+            return new LogTailResponse(
+                    logPath.toString(),
+                    totalLines,
+                    totalLines,
+                    new ArrayList<>(recentLines)
+            );
+        }
+
         List<String> lines = new ArrayList<>();
         long currentLine = 0L;
 
-        try (BufferedReader reader = Files.newBufferedReader(logPath)) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                Files.newInputStream(logPath), safeDecoder()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (currentLine >= safeFromLine && lines.size() < safeLimit) {
@@ -97,6 +126,12 @@ public class LogStreamController {
         }
 
         return PRIMARY_LOG_PATH;
+    }
+
+    private static CharsetDecoder safeDecoder() {
+        return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
     }
 
     public record LogTailResponse(

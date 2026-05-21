@@ -27,6 +27,18 @@ public class Chunk {
         this.similarity = 0.0;
     }
 
+    /**
+     * Construtor direto para facilitar criação de chunks.
+     */
+    public Chunk(String id, String documentId, String text, int index, double[] embedding, double similarity) {
+        this.id = id != null ? id : UUID.randomUUID().toString();
+        this.documentId = documentId;
+        this.text = text;
+        this.index = index;
+        this.embedding = embedding;
+        this.similarity = similarity;
+    }
+
     public static class Builder {
         private String id;
         private String documentId;

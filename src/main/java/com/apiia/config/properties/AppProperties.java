@@ -216,6 +216,9 @@ public class AppProperties {
         @NotNull
         private Duration timeout = Duration.ofSeconds(120);
 
+        @NotNull
+        private Duration processingTimeout = Duration.ofMinutes(30);
+
         @Min(1)
         private long maxFileBytes = 209_715_200L;
 
@@ -265,6 +268,14 @@ public class AppProperties {
 
         public void setTimeout(Duration timeout) {
             this.timeout = timeout;
+        }
+
+        public Duration getProcessingTimeout() {
+            return processingTimeout;
+        }
+
+        public void setProcessingTimeout(Duration processingTimeout) {
+            this.processingTimeout = processingTimeout;
         }
 
         public long getMaxFileBytes() {

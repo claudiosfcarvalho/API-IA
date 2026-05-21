@@ -242,14 +242,16 @@
         <pre class="debug-json">{{ devDebugSnapshot() }}</pre>
       </article>
 
-      <article class="debug-side-card">
+      
+    </div>
+    <article class="debug-side-card">
+      <div class="logs-live" #liveLogsContainer style="max-height:300px;overflow:auto;">
         <h2>Logs ao vivo do backend</h2>
-        <pre class="debug-json" style="max-height:300px;overflow:auto;">
+        <pre class="debug-json">
           <ng-container *ngFor="let line of liveLogs">{{ line }}&#10;</ng-container>
         </pre>
-      </article>
-    </div>
-
+      </div>
+    </article>
     <article class="dashboard-card" style="margin-top: 2em;">
       <div class="dashboard-head">
         <h2>📊 Dashboard Tempo Real</h2>

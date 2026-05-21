@@ -31,17 +31,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.function.Supplier;
 
 @Service
 public class DefaultTranscribeAudioUseCase implements TranscribeAudioUseCase {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultTranscribeAudioUseCase.class);
+    private static final long TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L;
 
     private final TranscriptionPort transcriptionPort;
     private final TranscriptFileWriterPort transcriptFileWriterPort;
@@ -78,9 +75,8 @@ public class DefaultTranscribeAudioUseCase implements TranscribeAudioUseCase {
             Supplier<TranscriptionPortResult> withCircuitBreaker = CircuitBreaker.decorateSupplier(circuitBreaker, withRetry);
             Supplier<TranscriptionPortResult> protectedCall = Bulkhead.decorateSupplier(bulkhead, withCircuitBreaker);
 
-            TranscriptionPortResult portResult = timeLimiter.executeFutureSupplier(
-                    () -> CompletableFuture.supplyAsync(protectedCall, executor)
-            );
+            CompletableFuture<TranscriptionPortResult> callFuture = CompletableFuture.supplyAsync(protectedCall, executor);
+            TranscriptionPortResult portResult = waitUntilReady(callFuture);
 
             List<TranscriptionSegment> segments = mapSpeakers(portResult.segments());
             String transcript = segments.stream().map(TranscriptionSegment::text).reduce("", (a, b) -> a.isBlank() ? b : a + " " + b);
@@ -206,9 +202,47 @@ public class DefaultTranscribeAudioUseCase implements TranscribeAudioUseCase {
 
     private static Throwable unwrap(Throwable ex) {
         Throwable current = ex;
-        while (current instanceof CompletionException && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException) && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
+    }
+
+    private TranscriptionPortResult waitUntilReady(CompletableFuture<TranscriptionPortResult> callFuture) {
+        long startedAt = System.nanoTime();
+        long maxWaitNanos = appProperties.getTranscription().getProcessingTimeout().toNanos();
+
+        while (true) {
+            long elapsedNanos = System.nanoTime() - startedAt;
+            long remainingNanos = maxWaitNanos - elapsedNanos;
+            if (remainingNanos <= 0) {
+                callFuture.cancel(true);
+                throw new AppException(ErrorCode.TRANSCRIPTION_TIMEOUT, HttpStatus.GATEWAY_TIMEOUT,
+                        "Timeout na chamada ao WhisperX");
+            }
+
+            long waitMillis = Math.min(TRANSCRIPTION_POLL_INTERVAL_MS,
+                    Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
+
+            try {
+                return callFuture.get(waitMillis, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException ignored) {
+                log.info("transcricao ainda em processamento elapsedMs={} remainingMs={}",
+                        TimeUnit.NANOSECONDS.toMillis(elapsedNanos),
+                        TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                callFuture.cancel(true);
+                throw new AppException(ErrorCode.TRANSCRIPTION_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Processamento de transcricao interrompido");
+            } catch (ExecutionException ex) {
+                Throwable root = unwrap(ex);
+                if (root instanceof AppException appException) {
+                    throw appException;
+                }
+                throw new AppException(ErrorCode.TRANSCRIPTION_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Falha na chamada ao WhisperX", Map.of("reason", root.getMessage()));
+            }
+        }
     }
 }

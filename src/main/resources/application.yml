@@ -48,6 +48,7 @@ app:
     allowedDir: "C:/Users/Claudio/repositorio/Pós-Graduação - Java Applied Engineering/dados/audio"
     outputDir: "C:/Users/Claudio/repositorio/Pós-Graduação - Java Applied Engineering/dados/transcricoes"
     timeout: "120s"                         # Timeout para transcrição
+    processingTimeout: "120m"                # Tempo maximo aguardando transcricao longa
     maxFileBytes: 209715200                 # Máximo 200MB (alinhado com upload)
 
   # === Configuração de Requisições Multimodais ===
@@ -61,7 +62,7 @@ app:
   # === Configuração de Síntese de Fala (TTS) ===
   tts:
     timeout: "60s"                          # Timeout para síntese de fala
-    maxTextChars: 10000                     # Limite de caracteres para sintetizar
+    maxTextChars: 100000                    # Limite de caracteres para sintetizar
     defaultLanguage: "pt-BR"                # Idioma padrão
     defaultVoice: "default"                 # Voz padrão
     defaultFormat: "wav"                    # Formato de saída padrão
@@ -159,5 +160,7 @@ resilience4j:
         max-wait-duration: 1s
 
 logging:
+  file:
+    name: logs/backend.log
   pattern:
     level: "%5p [cid:%X{correlationId}]"

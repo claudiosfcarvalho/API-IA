@@ -1,44 +1,48 @@
 @echo off
+setlocal EnableExtensions
 
-REM *****************************************************************************
-REM Script de parada da aplicação API-IA para Windows (Batch)
-REM
-REM Responsabilidades:
-REM   1. Parar backend Spring Boot (lê PID de .run/backend.pid e mata processo)
-REM   2. Parar frontend Angular (lê PID de .run/frontend.pid e mata processo)
-REM   3. Derrubar infraestrutura (Docker Compose down)
-REM
-REM Pré-requisitos:
-REM   - Scripts de inicialização (start.bat) foram executados anteriormente
-REM   - Docker instalado e rodando
-REM
-REM Uso: stop.bat
-REM *****************************************************************************
+set "ROOT_DIR=%~dp0.."
+set "RUN_DIR=%ROOT_DIR%\.run"
+set "TARGET=%~1"
 
-set ROOT_DIR=%~dp0\..
-cd /d %ROOT_DIR%
+cd /d "%ROOT_DIR%"
 
-REM Parar backend Spring Boot
-if exist "%ROOT_DIR%\.run\backend.pid" (
-    set /p BACK_PID=<"%ROOT_DIR%\.run\backend.pid"
-    tasklist /FI "PID eq %BACK_PID%" | findstr /i "java" >nul 2>&1 && (
+if /I "%TARGET%"=="ia" goto stop_ia
+if /I "%TARGET%"=="api" goto stop_api
+if /I "%TARGET%"=="frontend" goto stop_frontend
+
+echo Uso: scripts\stop.bat [ia^|api^|frontend]
+exit /b 1
+
+:stop_ia
+echo [stop] Parando containers de IA...
+docker compose stop ollama whisperx
+exit /b %errorlevel%
+
+:stop_api
+if exist "%RUN_DIR%\backend.pid" (
+    set /p BACK_PID=<"%RUN_DIR%\backend.pid"
+    if defined BACK_PID (
         echo [stop] Encerrando backend PID=%BACK_PID%
-        taskkill /PID %BACK_PID% /F
+        taskkill /PID %BACK_PID% /T /F >nul 2>&1
     )
-    del "%ROOT_DIR%\.run\backend.pid"
+    del "%RUN_DIR%\backend.pid" >nul 2>&1
+    exit /b 0
 )
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8080" ^| findstr "LISTENING"') do taskkill /PID %%P /T /F >nul 2>&1
+echo [stop] API Java parada.
+exit /b 0
 
-REM Parar frontend Angular
-if exist "%ROOT_DIR%\.run\frontend.pid" (
-    set /p FRONT_PID=<"%ROOT_DIR%\.run\frontend.pid"
-    tasklist /FI "PID eq %FRONT_PID%" | findstr /i "node" >nul 2>&1 && (
+:stop_frontend
+if exist "%RUN_DIR%\frontend.pid" (
+    set /p FRONT_PID=<"%RUN_DIR%\frontend.pid"
+    if defined FRONT_PID (
         echo [stop] Encerrando frontend PID=%FRONT_PID%
-        taskkill /PID %FRONT_PID% /F
+        taskkill /PID %FRONT_PID% /T /F >nul 2>&1
     )
-    del "%ROOT_DIR%\.run\frontend.pid"
+    del "%RUN_DIR%\frontend.pid" >nul 2>&1
+    exit /b 0
 )
-
-REM Derrubar infraestrutura (Docker Compose)
-echo [stop] Derrubando infraestrutura...
-docker compose down
-echo [stop] Infra encerrada.
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":4200" ^| findstr "LISTENING"') do taskkill /PID %%P /T /F >nul 2>&1
+echo [stop] Frontend parado.
+exit /b 0

@@ -6,3 +6,4 @@ target/
 /.run
 logs/frontend.log
 /logs
+/logs

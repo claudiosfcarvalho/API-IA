@@ -1,129 +1,114 @@
 #!/usr/bin/env bash
 
-################################################################################
-# Script de inicialização da aplicação API-IA para Linux/macOS (Bash)
-#
-# Responsabilidades:
-#   1. Criar diretórios necessários (.run para PIDs, logs para saída)
-#   2. Iniciar infraestrutura (Docker Compose com Ollama e WhisperX)
-#   3. Aguardar disponibilidade de cada serviço (health checks)
-#   4. Iniciar backend Spring Boot na porta 8080
-#   5. Iniciar frontend Angular na porta 4200
-#
-# Pré-requisitos:
-#   - Docker instalado e rodando
-#   - Maven 3.9+ instalado e no PATH
-#   - Node.js / npm instalado e no PATH
-#   - curl instalado e no PATH (para health checks)
-#
-# Uso: ./start.sh
-#
-################################################################################
-
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_DIR="$ROOT_DIR/.run"
+LOG_DIR="$ROOT_DIR/logs"
+
+mkdir -p "$RUN_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
 
-# Criar diretórios necessários
-mkdir -p "$ROOT_DIR/.run" "$ROOT_DIR/logs"
+usage() {
+  echo "Uso: ./scripts/start.sh [ia|api|frontend]"
+}
 
-################################################################################
-# Etapa 1: Infraestrutura (Docker Compose)
-################################################################################
-echo "[start] Subindo infraestrutura com docker compose..."
-docker compose up -d
-
-################################################################################
-# Etapa 2: Aguardar Ollama (LLM local)
-################################################################################
-echo "[start] Aguardando Ollama em http://localhost:11434 ..."
-for i in {1..60}; do
-  if curl -sf http://localhost:11434/ >/dev/null; then
-    echo "[start] Ollama pronto."
-    break
+is_port_listening() {
+  local port="$1"
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ano 2>/dev/null | grep -Eq "[:.]${port}[[:space:]]" && return 0
   fi
-  sleep 2
-  if [[ "$i" -eq 60 ]]; then
-    echo "[start] Timeout aguardando Ollama." >&2
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -Eq ":${port}[[:space:]]" && return 0
+  fi
+  return 1
+}
+
+wait_for_url() {
+  local url="$1"
+  local label="$2"
+  local attempts="$3"
+
+  echo "[start] Aguardando $label em $url ..."
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -sf "$url" >/dev/null 2>&1; then
+      echo "[start] $label pronto."
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "[start] Timeout aguardando $label." >&2
+  return 1
+}
+
+find_backend_jar() {
+  find "$ROOT_DIR/target" -maxdepth 1 -type f -name "*.jar" \
+    ! -name "original-*.jar" \
+    ! -name "*-sources.jar" \
+    ! -name "*-javadoc.jar" | head -n 1
+}
+
+start_ia() {
+  echo "[start] Subindo containers de IA..."
+  docker compose up -d ollama whisperx
+  wait_for_url "http://localhost:11434/" "Ollama" 60
+  wait_for_url "http://localhost:9000/health" "WhisperX" 120
+}
+
+start_api() {
+  local jar_path
+
+  if is_port_listening 8080; then
+    echo "[start] API Java já está em execução na porta 8080."
+    return 0
+  fi
+
+  echo "[start] Compilando backend com Maven..."
+  mvn clean package -f "$ROOT_DIR/pom.xml"
+
+  jar_path="$(find_backend_jar)"
+  if [[ -z "$jar_path" ]]; then
+    echo "[start] Nenhum JAR executável encontrado em target/." >&2
+    return 1
+  fi
+
+  echo "[start] Iniciando API Java..."
+  nohup java -jar "$jar_path" > "$LOG_DIR/backend.log" 2>&1 &
+  echo $! > "$RUN_DIR/backend.pid"
+  echo "[start] Backend iniciado com PID=$(cat "$RUN_DIR/backend.pid")"
+  wait_for_url "http://localhost:8080/actuator/health" "backend" 120
+}
+
+start_frontend() {
+  if is_port_listening 4200; then
+    echo "[start] Frontend já está em execução na porta 4200."
+    return 0
+  fi
+
+  echo "[start] Iniciando frontend Angular..."
+  (
+    cd "$ROOT_DIR/frontend"
+    nohup npm start > "$LOG_DIR/frontend.log" 2>&1 &
+    echo $! > "$RUN_DIR/frontend.pid"
+  )
+  echo "[start] Frontend iniciado com PID=$(cat "$RUN_DIR/frontend.pid")"
+}
+
+TARGET="${1:-}"
+
+case "$TARGET" in
+  ia)
+    start_ia
+    ;;
+  api)
+    start_api
+    ;;
+  frontend)
+    start_frontend
+    ;;
+  *)
+    usage
     exit 1
-  fi
-done
-
-################################################################################
-# Etapa 3: Aguardar WhisperX (serviço de transcrição)
-################################################################################
-echo "[start] Aguardando WhisperX em http://localhost:9000/health ..."
-for i in {1..120}; do
-  if curl -sf http://localhost:9000/health >/dev/null; then
-    echo "[start] WhisperX pronto."
-    break
-  fi
-  sleep 2
-  if [[ "$i" -eq 120 ]]; then
-    echo "[start] Timeout aguardando WhisperX." >&2
-    exit 1
-  fi
-done
-
-echo "[start] Infra OK."
-
-################################################################################
-# Etapa 4: Backend Spring Boot
-################################################################################
-echo "[start] Iniciando backend Spring Boot na porta 8080..."
-nohup java -jar "$ROOT_DIR/backend/target/api-ia.jar" > "$ROOT_DIR/logs/backend.log" 2>&1 &
-echo $! > "$ROOT_DIR/.run/backend.pid"
-echo "[start] Backend iniciado com PID=$(cat "$ROOT_DIR/.run/backend.pid")"
-
-echo "[start] Aguardando backend em http://localhost:8080/actuator/health ..."
-for i in {1..120}; do
-  if curl -sf http://localhost:8080/actuator/health >/dev/null; then
-    echo "[start] Backend pronto."
-    break
-  fi
-  sleep 2
-  if [[ "$i" -eq 120 ]]; then
-    echo "[start] Timeout aguardando backend. Consulte logs/backend.log" >&2
-    exit 1
-  fi
-done
-
-################################################################################
-# Etapa 5: Frontend Angular
-################################################################################
-echo "[start] Iniciando frontend Angular na porta 4200..."
-cd "$ROOT_DIR/frontend"
-npm start > "$ROOT_DIR/logs/frontend.log" 2>&1 &
-FRONT_BOOT_PID=$!
-
-# Em Git Bash no Windows, o PID de "npm start" pode nao ser o processo final do servidor.
-# Aguarda a porta 4200 e tenta capturar o PID real via netstat.
-FRONT_PORT_PID=""
-for i in {1..60}; do
-  FRONT_PORT_PID="$(netstat -ano 2>/dev/null | grep -E "[:.]4200" | awk '/LISTENING|ESTABLISHED/ {print $NF; exit}' | tr -d '\r' || true)"
-  if [[ -n "$FRONT_PORT_PID" ]]; then
-    break
-  fi
-  sleep 1
-done
-
-if [[ -n "$FRONT_PORT_PID" ]]; then
-  echo "$FRONT_PORT_PID" > "$ROOT_DIR/.run/frontend.pid"
-else
-  echo "$FRONT_BOOT_PID" > "$ROOT_DIR/.run/frontend.pid"
-fi
-echo "[start] Frontend iniciado com PID=$(cat "$ROOT_DIR/.run/frontend.pid")"
-
-cd "$ROOT_DIR"
-
-################################################################################
-# Resumo de inicialização
-################################################################################
-echo "[start] Ambiente pronto."
-echo "[start] URLs:"
-echo "  Backend: http://localhost:8080"
-echo "  Frontend: http://localhost:4200"
-echo "  Health backend: http://localhost:8080/actuator/health"
-echo "  Health whisperx: http://localhost:9000/health"
-echo "[start] Logs: logs/backend.log e logs/frontend.log"
+    ;;
+esac
